@@ -4512,8 +4512,8 @@
           <context context-type="linenumber">64</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="6027384115096003451" datatype="html">
-        <source>System default (attachments last)</source>
+      <trans-unit id="mailRuleCombinedPdfLayoutSystemDefault" datatype="html">
+        <source>System default</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
           <context context-type="linenumber">87</context>
@@ -4526,7 +4526,7 @@
           <context context-type="linenumber">68</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="5612311120099011123" datatype="html">
+      <trans-unit id="mailRuleCombinedPdfLayoutTextHtmlMailFirst" datatype="html">
         <source>Text, then HTML, then attachments</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
@@ -4540,8 +4540,8 @@
           <context context-type="linenumber">72</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="8612297744109131160" datatype="html">
-        <source>HTML, then text, then attachments</source>
+      <trans-unit id="mailRuleCombinedPdfLayoutHtmlTextAttachmentsFirst" datatype="html">
+        <source>Attachments first, then HTML/Text</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
           <context context-type="linenumber">95</context>
@@ -4554,7 +4554,7 @@
           <context context-type="linenumber">76</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="4201145309513322108" datatype="html">
+      <trans-unit id="mailRuleCombinedPdfLayoutHtmlOnly" datatype="html">
         <source>HTML only, then attachments</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
@@ -4568,7 +4568,7 @@
           <context context-type="linenumber">80</context>
         </context-group>
       </trans-unit>
-      <trans-unit id="3267011447859912045" datatype="html">
+      <trans-unit id="mailRuleCombinedPdfLayoutTextOnly" datatype="html">
         <source>Text only, then attachments</source>
         <context-group purpose="location">
           <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>

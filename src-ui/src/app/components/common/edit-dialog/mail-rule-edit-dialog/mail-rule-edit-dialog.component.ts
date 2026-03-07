@@ -88,23 +88,23 @@ const PDF_LAYOUT_OPTIONS = [
 const COMBINED_PDF_LAYOUT_OPTIONS = [
   {
     id: MailRulePdfLayout.Default,
-    name: $localize`System default (attachments last)`,
+    name: $localize`:@@mailRuleCombinedPdfLayoutSystemDefault:System default`,
   },
   {
     id: MailRulePdfLayout.TextHtml,
-    name: $localize`Text, then HTML, then attachments`,
+    name: $localize`:@@mailRuleCombinedPdfLayoutTextHtmlMailFirst:Text, then HTML, then attachments`,
   },
   {
     id: MailRulePdfLayout.HtmlText,
-    name: $localize`HTML, then text, then attachments`,
+    name: $localize`:@@mailRuleCombinedPdfLayoutHtmlTextAttachmentsFirst:Attachments first, then HTML/Text`,
   },
   {
     id: MailRulePdfLayout.HtmlOnly,
-    name: $localize`HTML only, then attachments`,
+    name: $localize`:@@mailRuleCombinedPdfLayoutHtmlOnly:HTML only, then attachments`,
   },
   {
     id: MailRulePdfLayout.TextOnly,
-    name: $localize`Text only, then attachments`,
+    name: $localize`:@@mailRuleCombinedPdfLayoutTextOnly:Text only, then attachments`,
   },
 ]
 

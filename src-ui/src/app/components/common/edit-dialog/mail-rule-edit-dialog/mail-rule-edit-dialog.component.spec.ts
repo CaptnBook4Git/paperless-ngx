@@ -120,6 +120,23 @@ describe('MailRuleEditDialogComponent', () => {
     expect(component.consumptionScopeOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          id: MailRuleConsumptionScope.Attachments,
+          name: 'Only process attachments',
+        }),
+        expect.objectContaining({
+          id: MailRuleConsumptionScope.EmailOnly,
+          name: 'Process message as .eml',
+        }),
+        expect.objectContaining({
+          id: MailRuleConsumptionScope.Everything,
+          name: 'Process message as .eml and attachments separately',
+        }),
+      ])
+    )
+
+    expect(component.consumptionScopeOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
           id: MailRuleConsumptionScope.CombinedPdfAttachment,
           name: 'Merge Email with Attachment',
         }),
@@ -148,8 +165,12 @@ describe('MailRuleEditDialogComponent', () => {
           name: 'Text, then HTML, then attachments',
         }),
         expect.objectContaining({
+          id: MailRulePdfLayout.HtmlText,
+          name: 'Attachments first, then HTML/Text',
+        }),
+        expect.objectContaining({
           id: MailRulePdfLayout.Default,
-          name: 'System default (attachments last)',
+          name: 'System default',
         }),
       ])
     )
