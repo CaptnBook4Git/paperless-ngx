@@ -404,6 +404,7 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
             assign_correspondent_from=MailRule.CorrespondentSource.FROM_NOTHING,
             order=0,
             attachment_type=MailRule.AttachmentProcessing.ATTACHMENTS_ONLY,
+            consumption_scope=MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
         )
 
         response = self.client.get(self.ENDPOINT)
@@ -432,6 +433,7 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
         )
         self.assertEqual(returned_rule1["order"], rule1.order)
         self.assertEqual(returned_rule1["attachment_type"], rule1.attachment_type)
+        self.assertEqual(returned_rule1["consumption_scope"], rule1.consumption_scope)
 
     def test_create_mail_rule(self) -> None:
         """
@@ -480,6 +482,7 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
             "assign_correspondent_from": MailRule.CorrespondentSource.FROM_NOTHING,
             "order": 0,
             "attachment_type": MailRule.AttachmentProcessing.ATTACHMENTS_ONLY,
+            "consumption_scope": MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
             "action_parameter": "parameter",
             "assign_tags": [tag.pk],
             "assign_correspondent": correspondent.pk,
@@ -523,6 +526,7 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
         )
         self.assertEqual(returned_rule1["order"], rule1["order"])
         self.assertEqual(returned_rule1["attachment_type"], rule1["attachment_type"])
+        self.assertEqual(returned_rule1["consumption_scope"], rule1["consumption_scope"])
         self.assertEqual(returned_rule1["action_parameter"], rule1["action_parameter"])
         self.assertEqual(
             returned_rule1["assign_correspondent"],
@@ -623,6 +627,7 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
             data={
                 "name": "Updated Name 1",
                 "action": MailRule.MailAction.DELETE,
+                "consumption_scope": MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
             },
         )
 
@@ -631,6 +636,10 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
         returned_rule1 = MailRule.objects.get(pk=rule1.pk)
         self.assertEqual(returned_rule1.name, "Updated Name 1")
         self.assertEqual(returned_rule1.action, MailRule.MailAction.DELETE)
+        self.assertEqual(
+            returned_rule1.consumption_scope,
+            MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
+        )
 
     def test_get_mail_rules_owner_aware(self) -> None:
         """

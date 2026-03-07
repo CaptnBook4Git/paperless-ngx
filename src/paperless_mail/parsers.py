@@ -254,35 +254,61 @@ class MailDocumentParser(DocumentParser):
 
             self.log.debug("Merging email text and HTML content into single PDF")
 
-            with (
-                GotenbergClient(
-                    host=settings.TIKA_GOTENBERG_ENDPOINT,
-                    timeout=settings.CELERY_TASK_TIME_LIMIT,
-                ) as client,
-                client.merge.merge() as route,
-            ):
-                # Configure requested PDF/A formatting, if any
-                pdf_a_format = self._settings_to_gotenberg_pdfa()
-                if pdf_a_format is not None:
-                    route.pdf_format(pdf_a_format)
+            match pdf_layout:
+                case MailRule.PdfLayout.HTML_TEXT:
+                    pdfs_to_merge = [pdf_of_html_content, mail_pdf_file]
+                case MailRule.PdfLayout.HTML_ONLY:
+                    pdfs_to_merge = [pdf_of_html_content]
+                case MailRule.PdfLayout.TEXT_ONLY:
+                    pdfs_to_merge = [mail_pdf_file]
+                case MailRule.PdfLayout.TEXT_HTML | _:
+                    pdfs_to_merge = [mail_pdf_file, pdf_of_html_content]
 
-                match pdf_layout:
-                    case MailRule.PdfLayout.HTML_TEXT:
-                        route.merge([pdf_of_html_content, mail_pdf_file])
-                    case MailRule.PdfLayout.HTML_ONLY:
-                        route.merge([pdf_of_html_content])
-                    case MailRule.PdfLayout.TEXT_ONLY:
-                        route.merge([mail_pdf_file])
-                    case MailRule.PdfLayout.TEXT_HTML | _:
-                        route.merge([mail_pdf_file, pdf_of_html_content])
+            archive_path = self.merge_pdfs(
+                pdfs_to_merge,
+                output_name=archive_path.name,
+                error_message="Error while merging email HTML into PDF",
+            )
 
-                try:
-                    response = route.run()
-                    archive_path.write_bytes(response.content)
-                except Exception as err:
-                    raise ParseError(
-                        f"Error while merging email HTML into PDF: {err}",
-                    ) from err
+        return archive_path
+
+    def generate_pdf_from_eml(
+        self,
+        document_path: Path,
+        pdf_layout: MailRule.PdfLayout | None = None,
+    ) -> Path:
+        return self.generate_pdf(
+            self.parse_file_to_message(document_path),
+            pdf_layout,
+        )
+
+    def merge_pdfs(
+        self,
+        pdf_files: list[Path],
+        *,
+        output_name: str = "merged.pdf",
+        error_message: str = "Error while merging PDFs",
+    ) -> Path:
+        archive_path = Path(self.tempdir) / output_name
+
+        with (
+            GotenbergClient(
+                host=settings.TIKA_GOTENBERG_ENDPOINT,
+                timeout=settings.CELERY_TASK_TIME_LIMIT,
+            ) as client,
+            client.merge.merge() as route,
+        ):
+            pdf_a_format = self._settings_to_gotenberg_pdfa()
+            if pdf_a_format is not None:
+                route.pdf_format(pdf_a_format)
+
+            route.merge(pdf_files)
+
+            try:
+                response = route.run()
+                archive_path.write_bytes(response.content)
+            except Exception as err:
+                raise ParseError(f"{error_message}: {err}") from err
 
         return archive_path
 

@@ -670,6 +670,35 @@ class TestParser:
 
         assert str(request.url) == "http://localhost:3000/forms/chromium/convert/html"
 
+    def test_merge_pdfs(
+        self,
+        httpx_mock: HTTPXMock,
+        mail_parser: MailDocumentParser,
+        merged_pdf_first: Path,
+        merged_pdf_second: Path,
+    ) -> None:
+        """
+        GIVEN:
+            - Two source PDFs
+        WHEN:
+            - A merge is requested
+        THEN:
+            - Gotenberg merges the PDFs and returns the merged file path
+        """
+
+        httpx_mock.add_response(
+            url="http://localhost:3000/forms/pdfengines/merge",
+            method="POST",
+            content=b"Pretend merged PDF content",
+        )
+
+        retval = mail_parser.merge_pdfs([merged_pdf_first, merged_pdf_second])
+
+        assert retval.read_bytes() == b"Pretend merged PDF content"
+        request = httpx_mock.get_request()
+
+        assert str(request.url) == "http://localhost:3000/forms/pdfengines/merge"
+
     @pytest.mark.httpx_mock(can_send_already_matched_responses=True)
     @mock.patch("gotenberg_client._merge.routes.SyncMergePdfsRoute.merge")
     @mock.patch("paperless_mail.models.MailRule.objects.get")

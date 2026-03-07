@@ -279,3 +279,45 @@ class TestMailMessageGpgDecryptor(TestMail):
                 ],
             ],
         )
+
+    @mock.patch("paperless_mail.mail.MailDocumentParser.merge_pdfs")
+    @mock.patch("paperless_mail.mail.MailDocumentParser.generate_pdf_from_eml")
+    def test_handle_encrypted_message_combined_mode(
+        self,
+        mock_generate_pdf_from_eml: mock.Mock,
+        mock_merge_pdfs: mock.Mock,
+    ) -> None:
+        message = self.mailMocker.messageBuilder.create_message(
+            subject="the message title",
+            from_="Myself",
+            attachments=[_AttachmentDef(filename="f1.pdf")],
+            body="Test mail",
+        )
+        encrypted_message = self.messageEncryptor.encrypt(message)
+
+        merged_pdf = self.dirs.scratch_dir / "encrypted-merged.pdf"
+        merged_pdf.write_bytes(b"PDF merged")
+        mail_pdf = self.dirs.scratch_dir / "encrypted-mail.pdf"
+        mail_pdf.write_bytes(b"PDF mail")
+        mock_generate_pdf_from_eml.return_value = mail_pdf
+        mock_merge_pdfs.return_value = merged_pdf
+
+        account = MailAccount.objects.create()
+        rule = MailRule.objects.create(
+            assign_title_from=MailRule.TitleSource.FROM_FILENAME,
+            consumption_scope=MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
+            account=account,
+        )
+
+        result = self.mail_account_handler._handle_message(encrypted_message, rule)
+
+        self.assertEqual(result, 1)
+        mock_generate_pdf_from_eml.assert_called_once()
+        mock_merge_pdfs.assert_called_once()
+        self.mailMocker.assert_queue_consumption_tasks_call_args(
+            [
+                [
+                    {"override_title": "f1", "override_filename": "f1.pdf"},
+                ],
+            ],
+        )

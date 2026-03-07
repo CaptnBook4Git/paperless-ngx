@@ -110,6 +110,13 @@ class MailRule(document_models.ModelWithOwner):
                 "+ process attachments as separate documents",
             ),
         )
+        MERGED_EMAIL_AND_ATTACHMENT = (
+            4,
+            _(
+                "Convert full Mail to PDF and merge exactly one eligible PDF "
+                "attachment into a single document",
+            ),
+        )
 
     class AttachmentProcessing(models.IntegerChoices):
         ATTACHMENTS_ONLY = 1, _("Only process attachments.")

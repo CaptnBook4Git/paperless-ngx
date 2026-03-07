@@ -8,6 +8,7 @@ import { of } from 'rxjs'
 import {
   MailAction,
   MailMetadataCorrespondentOption,
+  MailRuleConsumptionScope,
 } from 'src/app/data/mail-rule'
 import { IfOwnerDirective } from 'src/app/directives/if-owner.directive'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
@@ -112,5 +113,15 @@ describe('MailRuleEditDialogComponent', () => {
     component.objectForm = null
     expect(component.showCorrespondentField).toBeFalsy()
     expect(component.showActionParamField).toBeFalsy()
+  })
+
+  it('should expose the combined PDF attachment consumption option', () => {
+    expect(component.consumptionScopeOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: MailRuleConsumptionScope.CombinedPdfAttachment,
+        }),
+      ])
+    )
   })
 })

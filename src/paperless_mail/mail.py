@@ -43,6 +43,7 @@ from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
 from paperless_mail.models import ProcessedMail
 from paperless_mail.oauth import PaperlessMailOAuth2Manager
+from paperless_mail.parsers import MailDocumentParser
 from paperless_mail.preprocessor import MailMessageDecryptor
 from paperless_mail.preprocessor import MailMessagePreprocessor
 
@@ -723,7 +724,15 @@ class MailAccountHandler(LoggingMixin):
         tag_ids: list[int] = [tag.id for tag in rule.assign_tags.all()]
         doc_type = rule.assign_document_type
 
-        if (
+        if rule.consumption_scope == MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT:
+            processed_elements += self._process_combined_email_attachment_pdf(
+                message,
+                rule,
+                tag_ids,
+                doc_type,
+            )
+
+        elif (
             rule.consumption_scope == MailRule.ConsumptionScope.EML_ONLY
             or rule.consumption_scope == MailRule.ConsumptionScope.EVERYTHING
         ):
@@ -746,6 +755,76 @@ class MailAccountHandler(LoggingMixin):
             )
 
         return processed_elements
+
+    def _attachment_matches_rule(
+        self,
+        att: MailAttachment,
+        rule: MailRule,
+    ) -> bool:
+        if (
+            att.content_disposition != "attachment"
+            and rule.attachment_type == MailRule.AttachmentProcessing.ATTACHMENTS_ONLY
+        ):
+            self.log.debug(
+                f"Rule {rule}: "
+                f"Skipping attachment {att.filename} "
+                f"with content disposition {att.content_disposition}",
+            )
+            return False
+
+        if not self.filename_inclusion_matches(
+            rule.filter_attachment_filename_include,
+            att.filename,
+        ):
+            self.log.debug(
+                f"Rule {rule}: "
+                f"Skipping attachment {att.filename} "
+                f"does not match pattern {rule.filter_attachment_filename_include}",
+            )
+            return False
+
+        if self.filename_exclusion_matches(
+            rule.filter_attachment_filename_exclude,
+            att.filename,
+        ):
+            self.log.debug(
+                f"Rule {rule}: "
+                f"Skipping attachment {att.filename} "
+                f"does match pattern {rule.filter_attachment_filename_exclude}",
+            )
+            return False
+
+        return True
+
+    def _write_message_to_temp_eml(self, message: MailMessage) -> Path:
+        settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+        _, temp_filename = tempfile.mkstemp(
+            prefix="paperless-mail-",
+            dir=settings.SCRATCH_DIR,
+            suffix=".eml",
+        )
+        with Path(temp_filename).open("wb") as f:
+            # Move "From"-header to beginning of file
+            # TODO: This ugly workaround is needed because the parser is
+            #   chosen only by the mime_type detected via magic
+            #   (see documents/consumer.py "mime_type = magic.from_file")
+            #   Unfortunately magic sometimes fails to detect the mime
+            #   type of .eml files correctly as message/rfc822 and instead
+            #   detects text/plain.
+            #   This also effects direct file consumption of .eml files
+            #   which are not treated with this workaround.
+            from_element = None
+            for i, header in enumerate(message.obj._headers):
+                if header[0] == "From":
+                    from_element = i
+            if from_element:
+                new_headers = [message.obj._headers.pop(from_element)]
+                new_headers += message.obj._headers
+                message.obj._headers = new_headers
+
+            f.write(message.obj.as_bytes())
+
+        return Path(temp_filename)
 
     def filename_inclusion_matches(
         self,
@@ -796,39 +875,7 @@ class MailAccountHandler(LoggingMixin):
         consume_tasks = []
 
         for att in message.attachments:
-            if (
-                att.content_disposition != "attachment"
-                and rule.attachment_type
-                == MailRule.AttachmentProcessing.ATTACHMENTS_ONLY
-            ):
-                self.log.debug(
-                    f"Rule {rule}: "
-                    f"Skipping attachment {att.filename} "
-                    f"with content disposition {att.content_disposition}",
-                )
-                continue
-
-            if not self.filename_inclusion_matches(
-                rule.filter_attachment_filename_include,
-                att.filename,
-            ):
-                # Force the filename and pattern to the lowercase
-                # as this is system dependent otherwise
-                self.log.debug(
-                    f"Rule {rule}: "
-                    f"Skipping attachment {att.filename} "
-                    f"does not match pattern {rule.filter_attachment_filename_include}",
-                )
-                continue
-            elif self.filename_exclusion_matches(
-                rule.filter_attachment_filename_exclude,
-                att.filename,
-            ):
-                self.log.debug(
-                    f"Rule {rule}: "
-                    f"Skipping attachment {att.filename} "
-                    f"does match pattern {rule.filter_attachment_filename_exclude}",
-                )
+            if not self._attachment_matches_rule(att, rule):
                 continue
 
             correspondent = self._get_correspondent(message, rule)
@@ -924,6 +971,102 @@ class MailAccountHandler(LoggingMixin):
 
         return processed_attachments
 
+    def _process_combined_email_attachment_pdf(
+        self,
+        message: MailMessage,
+        rule: MailRule,
+        tag_ids,
+        doc_type,
+    ) -> int:
+        eligible_pdf_attachments: list[MailAttachment] = []
+        requires_fallback_to_eml = False
+
+        for att in message.attachments:
+            if not self._attachment_matches_rule(att, rule):
+                continue
+
+            mime_type = magic.from_buffer(att.payload, mime=True)
+            if mime_type != "application/pdf" or not is_mime_type_supported(mime_type):
+                requires_fallback_to_eml = True
+                self.log.debug(
+                    f"Rule {rule}: "
+                    f"Combined mode requires exactly one eligible PDF attachment, "
+                    f"falling back to .eml-only consumption because {att.filename} "
+                    f"has mime type {mime_type}",
+                )
+                continue
+
+            eligible_pdf_attachments.append(att)
+
+        if requires_fallback_to_eml or len(eligible_pdf_attachments) != 1:
+            self.log.debug(
+                f"Rule {rule}: Combined mode found "
+                f"{len(eligible_pdf_attachments)} eligible PDF attachment(s); "
+                "falling back to .eml-only consumption",
+            )
+            return self._process_eml(
+                message,
+                rule,
+                tag_ids,
+                doc_type,
+            )
+
+        attachment = eligible_pdf_attachments[0]
+        parser = MailDocumentParser(logging_group=self.logging_group)
+        eml_filename = self._write_message_to_temp_eml(message)
+        mail_pdf = parser.generate_pdf_from_eml(eml_filename, rule.pdf_layout)
+
+        sanitized_attachment_name = pathvalidate.sanitize_filename(attachment.filename)
+        if not sanitized_attachment_name:
+            sanitized_attachment_name = "mail-attachment.pdf"
+
+        attachment_path = Path(parser.tempdir) / sanitized_attachment_name
+        attachment_path.write_bytes(attachment.payload)
+        merged_pdf = parser.merge_pdfs(
+            [mail_pdf, attachment_path],
+            output_name="merged_mail_attachment.pdf",
+            error_message="Error while merging email PDF with attachment",
+        )
+
+        correspondent = self._get_correspondent(message, rule)
+        title = self._get_title(message, attachment, rule)
+
+        self.log.info(
+            f"Rule {rule}: "
+            f"Consuming merged PDF for mail {message.subject} from {message.from_} "
+            f"with attachment {attachment.filename}",
+        )
+
+        input_doc = ConsumableDocument(
+            source=DocumentSource.MailFetch,
+            original_file=merged_pdf,
+        )
+        doc_overrides = DocumentMetadataOverrides(
+            title=title,
+            filename=sanitized_attachment_name,
+            correspondent_id=correspondent.id if correspondent else None,
+            document_type_id=doc_type.id if doc_type else None,
+            tag_ids=tag_ids,
+            owner_id=(
+                rule.owner.id
+                if (rule.assign_owner_from_rule and rule.owner)
+                else None
+            ),
+        )
+
+        consume_task = consume_file.s(
+            input_doc,
+            doc_overrides,
+        )
+
+        queue_consumption_tasks(
+            consume_tasks=[consume_task],
+            rule=rule,
+            message=message,
+        )
+
+        return 1
+
     def _process_eml(
         self,
         message: MailMessage,
@@ -931,32 +1074,7 @@ class MailAccountHandler(LoggingMixin):
         tag_ids,
         doc_type,
     ):
-        settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
-        _, temp_filename = tempfile.mkstemp(
-            prefix="paperless-mail-",
-            dir=settings.SCRATCH_DIR,
-            suffix=".eml",
-        )
-        with Path(temp_filename).open("wb") as f:
-            # Move "From"-header to beginning of file
-            # TODO: This ugly workaround is needed because the parser is
-            #   chosen only by the mime_type detected via magic
-            #   (see documents/consumer.py "mime_type = magic.from_file")
-            #   Unfortunately magic sometimes fails to detect the mime
-            #   type of .eml files correctly as message/rfc822 and instead
-            #   detects text/plain.
-            #   This also effects direct file consumption of .eml files
-            #   which are not treated with this workaround.
-            from_element = None
-            for i, header in enumerate(message.obj._headers):
-                if header[0] == "From":
-                    from_element = i
-            if from_element:
-                new_headers = [message.obj._headers.pop(from_element)]
-                new_headers += message.obj._headers
-                message.obj._headers = new_headers
-
-            f.write(message.obj.as_bytes())
+        temp_filename = self._write_message_to_temp_eml(message)
 
         correspondent = self._get_correspondent(message, rule)
 

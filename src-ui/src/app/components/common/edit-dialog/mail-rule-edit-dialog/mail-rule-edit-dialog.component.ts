@@ -56,6 +56,10 @@ const CONSUMPTION_SCOPE_OPTIONS = [
     id: MailRuleConsumptionScope.Everything,
     name: $localize`Process message as .eml and attachments separately`,
   },
+  {
+    id: MailRuleConsumptionScope.CombinedPdfAttachment,
+    name: $localize`Convert message to PDF and merge exactly one eligible PDF attachment`,
+  },
 ]
 
 const PDF_LAYOUT_OPTIONS = [
