@@ -4,32 +4,23 @@ from collections.abc import Callable
 from collections.abc import Iterable
 from datetime import timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import TypeVar
 
-import faiss
-import llama_index.core.settings as llama_settings
 from celery import states
 from django.conf import settings
 from django.utils import timezone
-from llama_index.core import Document as LlamaDocument
-from llama_index.core import StorageContext
-from llama_index.core import VectorStoreIndex
-from llama_index.core import load_index_from_storage
-from llama_index.core.indices.prompt_helper import PromptHelper
-from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.core.prompts import PromptTemplate
-from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.core.schema import BaseNode
-from llama_index.core.storage.docstore import SimpleDocumentStore
-from llama_index.core.storage.index_store import SimpleIndexStore
-from llama_index.core.text_splitter import TokenTextSplitter
-from llama_index.vector_stores.faiss import FaissVectorStore
 
 from documents.models import Document
 from documents.models import PaperlessTask
 from paperless_ai.embedding import build_llm_index_text
 from paperless_ai.embedding import get_embedding_dim
 from paperless_ai.embedding import get_embedding_model
+
+if TYPE_CHECKING:
+    from llama_index.core import StorageContext
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core.schema import BaseNode
 
 _T = TypeVar("_T")
 IterWrapper = Callable[[Iterable[_T]], Iterable[_T]]
@@ -65,11 +56,17 @@ def queue_llm_index_update_if_needed(*, rebuild: bool, reason: str) -> bool:
     return True
 
 
-def get_or_create_storage_context(*, rebuild=False):
+def get_or_create_storage_context(*, rebuild=False) -> "StorageContext":
     """
     Loads or creates the StorageContext (vector store, docstore, index store).
     If rebuild=True, deletes and recreates everything.
     """
+    import faiss
+    from llama_index.core import StorageContext
+    from llama_index.core.storage.docstore import SimpleDocumentStore
+    from llama_index.core.storage.index_store import SimpleIndexStore
+    from llama_index.vector_stores.faiss import FaissVectorStore
+
     if rebuild:
         shutil.rmtree(settings.LLM_INDEX_DIR, ignore_errors=True)
         settings.LLM_INDEX_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,7 +90,7 @@ def get_or_create_storage_context(*, rebuild=False):
     )
 
 
-def build_document_node(document: Document) -> list[BaseNode]:
+def build_document_node(document: Document) -> list["BaseNode"]:
     """
     Given a Document, returns parsed Nodes ready for indexing.
     """
@@ -112,16 +109,23 @@ def build_document_node(document: Document) -> list[BaseNode]:
         "added": document.added.isoformat() if document.added else None,
         "modified": document.modified.isoformat(),
     }
+    from llama_index.core import Document as LlamaDocument
+    from llama_index.core.node_parser import SimpleNodeParser
+
     doc = LlamaDocument(text=text, metadata=metadata)
     parser = SimpleNodeParser()
     return parser.get_nodes_from_documents([doc])
 
 
-def load_or_build_index(nodes=None):
+def load_or_build_index(nodes=None) -> "VectorStoreIndex":
     """
     Load an existing VectorStoreIndex if present,
     or build a new one using provided nodes if storage is empty.
     """
+    import llama_index.core.settings as llama_settings
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core import load_index_from_storage
+
     embed_model = get_embedding_model()
     llama_settings.Settings.embed_model = embed_model
     storage_context = get_or_create_storage_context()
@@ -143,7 +147,7 @@ def load_or_build_index(nodes=None):
         )
 
 
-def remove_document_docstore_nodes(document: Document, index: VectorStoreIndex):
+def remove_document_docstore_nodes(document: Document, index: "VectorStoreIndex"):
     """
     Removes existing documents from docstore for a given document from the index.
     This is necessary because FAISS IndexFlatL2 is append-only.
@@ -183,6 +187,9 @@ def update_llm_index(
         return msg
 
     if rebuild or not vector_store_file_exists():
+        import llama_index.core.settings as llama_settings
+        from llama_index.core import VectorStoreIndex
+
         # remove meta.json to force re-detection of embedding dim
         (settings.LLM_INDEX_DIR / "meta.json").unlink(missing_ok=True)
         # Rebuild index from scratch
@@ -271,6 +278,10 @@ def llm_index_remove_document(document: Document):
 
 
 def truncate_content(content: str) -> str:
+    from llama_index.core.indices.prompt_helper import PromptHelper
+    from llama_index.core.prompts import PromptTemplate
+    from llama_index.core.text_splitter import TokenTextSplitter
+
     prompt_helper = PromptHelper(
         context_window=8192,
         num_output=512,
@@ -314,6 +325,8 @@ def query_similar_documents(
         if document_ids
         else None
     )
+
+    from llama_index.core.retrievers import VectorIndexRetriever
 
     retriever = VectorIndexRetriever(
         index=index,

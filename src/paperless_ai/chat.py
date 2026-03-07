@@ -1,10 +1,6 @@
 import logging
 import sys
 
-from llama_index.core import VectorStoreIndex
-from llama_index.core.prompts import PromptTemplate
-from llama_index.core.query_engine import RetrieverQueryEngine
-
 from documents.models import Document
 from paperless_ai.client import AIClient
 from paperless_ai.indexing import load_or_build_index
@@ -14,15 +10,21 @@ logger = logging.getLogger("paperless_ai.chat")
 MAX_SINGLE_DOC_CONTEXT_CHARS = 15000
 SINGLE_DOC_SNIPPET_CHARS = 800
 
-CHAT_PROMPT_TMPL = PromptTemplate(
-    template="""Context information is below.
+CHAT_PROMPT_TEMPLATE = """Context information is below.
     ---------------------
     {context_str}
     ---------------------
     Given the context information and not prior knowledge, answer the query.
     Query: {query_str}
-    Answer:""",
-)
+    Answer:"""
+
+
+def _get_prompt_template():
+    from llama_index.core.prompts import PromptTemplate
+
+    return PromptTemplate(
+        template=CHAT_PROMPT_TEMPLATE,
+    )
 
 
 def stream_chat_with_documents(query_str: str, documents: list[Document]):
@@ -42,6 +44,8 @@ def stream_chat_with_documents(query_str: str, documents: list[Document]):
         logger.warning("No nodes found for the given documents.")
         yield "Sorry, I couldn't find any content to answer your question."
         return
+
+    from llama_index.core import VectorStoreIndex
 
     local_index = VectorStoreIndex(nodes=nodes)
     retriever = local_index.as_retriever(
@@ -85,10 +89,16 @@ def stream_chat_with_documents(query_str: str, documents: list[Document]):
             for node in top_nodes
         )
 
-    prompt = CHAT_PROMPT_TMPL.partial_format(
-        context_str=context,
-        query_str=query_str,
-    ).format(llm=client.llm)
+    prompt = (
+        _get_prompt_template()
+        .partial_format(
+            context_str=context,
+            query_str=query_str,
+        )
+        .format(llm=client.llm)
+    )
+
+    from llama_index.core.query_engine import RetrieverQueryEngine
 
     query_engine = RetrieverQueryEngine.from_args(
         retriever=retriever,
