@@ -1,0 +1,71 @@
+services:
+  redis:
+    image: 'redis:7.4'
+    restart: unless-stopped
+    volumes:
+      - 'paperless-redis:/data'
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      timeout: 10s
+      retries: 3
+  tika:
+    image: 'apache/tika:latest'
+    restart: unless-stopped
+  gotenberg:
+    image: 'gotenberg/gotenberg:8.27'
+    restart: unless-stopped
+    command:
+      - gotenberg
+      - '--chromium-disable-javascript=true'
+      - '--chromium-allow-list=file:///tmp/.*'
+  paperless:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    labels:
+      - coolify.traefik.middlewares=vpn-only@file
+    depends_on:
+      redis:
+        condition: service_healthy
+      tika:
+        condition: service_started
+      gotenberg:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - '-fs'
+        - '-S'
+        - '--max-time'
+        - '2'
+        - 'http://localhost:8000'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - 'paperless-data:/usr/src/paperless/data'
+      - 'paperless-media:/usr/src/paperless/media'
+      -
+        type: bind
+        source: ./export
+        target: /usr/src/paperless/export
+      -
+        type: bind
+        source: ./consume
+        target: /usr/src/paperless/consume
+    environment:
+      - SERVICE_URL_PAPERLESS_8000
+      - PAPERLESS_URL=$SERVICE_URL_PAPERLESS
+      # Sensitive values: configure these in Coolify environment variables.
+      - PAPERLESS_ADMIN_PASSWORD=${PAPERLESS_ADMIN_PASSWORD}
+      - PAPERLESS_ADMIN_USER=${PAPERLESS_ADMIN_USER:-admin}
+      - PAPERLESS_SECRET_KEY=${PAPERLESS_SECRET_KEY}
+      - 'PAPERLESS_REDIS=redis://redis:6379'
+      - PAPERLESS_TIKA_ENABLED=1
+      - 'PAPERLESS_TIKA_ENDPOINT=http://tika:9998'
+      - 'PAPERLESS_TIKA_GOTENBERG_ENDPOINT=http://gotenberg:3000'
