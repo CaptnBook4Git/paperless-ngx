@@ -626,6 +626,116 @@ class TestMail(
             ],
         )
 
+    def test_handle_message_scope_routing_modes_1_to_3_non_regression(self) -> None:
+        message = self.mailMocker.messageBuilder.create_message(attachments=1)
+        account = MailAccount.objects.create()
+
+        test_cases = [
+            (
+                MailRule.ConsumptionScope.ATTACHMENTS_ONLY,
+                ["attachments"],
+                7,
+                (0, 0, 1),
+            ),
+            (
+                MailRule.ConsumptionScope.EML_ONLY,
+                ["eml"],
+                5,
+                (0, 1, 0),
+            ),
+            (
+                MailRule.ConsumptionScope.EVERYTHING,
+                ["eml", "attachments"],
+                12,
+                (0, 1, 1),
+            ),
+        ]
+
+        for index, (
+            scope,
+            expected_order,
+            expected_result,
+            expected_calls,
+        ) in enumerate(test_cases, start=1):
+            with self.subTest(scope=scope):
+                rule = MailRule.objects.create(
+                    name=f"routing-{index}",
+                    account=account,
+                    consumption_scope=scope,
+                )
+
+                call_order: list[str] = []
+
+                def _combined(*_args, **_kwargs):
+                    call_order.append("combined")
+                    return 3
+
+                def _eml(*_args, **_kwargs):
+                    call_order.append("eml")
+                    return 5
+
+                def _attachments(*_args, **_kwargs):
+                    call_order.append("attachments")
+                    return 7
+
+                with (
+                    mock.patch.object(
+                        self.mail_account_handler,
+                        "_process_combined_email_attachment_pdf",
+                        side_effect=_combined,
+                    ) as mock_combined,
+                    mock.patch.object(
+                        self.mail_account_handler,
+                        "_process_eml",
+                        side_effect=_eml,
+                    ) as mock_eml,
+                    mock.patch.object(
+                        self.mail_account_handler,
+                        "_process_attachments",
+                        side_effect=_attachments,
+                    ) as mock_attachments,
+                ):
+                    result = self.mail_account_handler._handle_message(message, rule)
+
+                self.assertEqual(result, expected_result)
+                self.assertEqual(call_order, expected_order)
+                self.assertEqual(mock_combined.call_count, expected_calls[0])
+                self.assertEqual(mock_eml.call_count, expected_calls[1])
+                self.assertEqual(mock_attachments.call_count, expected_calls[2])
+
+    def test_handle_message_combined_scope_uses_only_combined_processor(self) -> None:
+        message = self.mailMocker.messageBuilder.create_message(attachments=1)
+        account = MailAccount.objects.create()
+        rule = MailRule.objects.create(
+            name="routing-combined",
+            account=account,
+            consumption_scope=MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
+        )
+
+        with (
+            mock.patch.object(
+                self.mail_account_handler,
+                "_process_combined_email_attachment_pdf",
+                return_value=11,
+            ) as mock_combined,
+            mock.patch.object(
+                self.mail_account_handler,
+                "_process_eml",
+                return_value=5,
+            ) as mock_eml,
+            mock.patch.object(
+                self.mail_account_handler,
+                "_process_attachments",
+                return_value=7,
+            ) as mock_attachments,
+        ):
+            result = self.mail_account_handler._handle_message(message, rule)
+
+        self.assertEqual(result, 11)
+        mock_combined.assert_called_once()
+        mock_eml.assert_not_called()
+        mock_attachments.assert_not_called()
+
     @mock.patch("paperless_mail.mail.MailDocumentParser.merge_pdfs")
     @mock.patch("paperless_mail.mail.MailDocumentParser.generate_pdf_from_eml")
     def test_handle_combined_email_attachment_pdf_mode(
@@ -663,7 +773,10 @@ class TestMail(
 
         merge_args = mock_merge_pdfs.call_args.args[0]
         self.assertEqual(len(merge_args), 2)
-        self.assertEqual(merge_args[1].name, "f1.pdf")
+        self.assertEqual(
+            [path.name for path in merge_args],
+            ["001-mail.pdf", "002-f1.pdf"],
+        )
 
         self.mailMocker.assert_queue_consumption_tasks_call_args(
             [
@@ -724,7 +837,7 @@ class TestMail(
         merge_args = mock_merge_pdfs.call_args.args[0]
         self.assertEqual(
             [path.name for path in merge_args],
-            ["mail.pdf", "f1.pdf", "f2.pdf"],
+            ["001-f1.pdf", "002-f2.pdf", "003-mail.pdf"],
         )
 
         self.mailMocker.assert_queue_consumption_tasks_call_args(

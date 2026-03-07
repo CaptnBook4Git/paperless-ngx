@@ -879,6 +879,36 @@ class MailAccountHandler(LoggingMixin):
 
         return attachment_paths
 
+    def _combined_mode_mail_first(
+        self,
+        rule: MailRule,
+    ) -> bool:
+        effective_layout = (
+            settings.EMAIL_PARSE_DEFAULT_LAYOUT
+            if rule.pdf_layout == MailRule.PdfLayout.DEFAULT
+            else rule.pdf_layout
+        )
+
+        return effective_layout != MailRule.PdfLayout.HTML_TEXT
+
+    def _stage_combined_pdf_merge_inputs(
+        self,
+        parser: MailDocumentParser,
+        files_in_order: list[Path],
+    ) -> list[Path]:
+        staged_files: list[Path] = []
+
+        for index, source_file in enumerate(files_in_order, start=1):
+            sanitized_name = pathvalidate.sanitize_filename(source_file.name)
+            if not sanitized_name:
+                sanitized_name = f"combined-{index}.pdf"
+
+            staged_path = Path(parser.tempdir) / f"{index:03d}-{sanitized_name}"
+            staged_path.write_bytes(source_file.read_bytes())
+            staged_files.append(staged_path)
+
+        return staged_files
+
     def filename_inclusion_matches(
         self,
         filter_attachment_filename_include: str | None,
@@ -1058,8 +1088,18 @@ class MailAccountHandler(LoggingMixin):
         )
 
         if attachment_paths:
+            ordered_merge_inputs = (
+                [mail_pdf, *attachment_paths]
+                if self._combined_mode_mail_first(rule)
+                else [*attachment_paths, mail_pdf]
+            )
+            staged_merge_inputs = self._stage_combined_pdf_merge_inputs(
+                parser,
+                ordered_merge_inputs,
+            )
+
             merged_pdf = parser.merge_pdfs(
-                [mail_pdf, *attachment_paths],
+                staged_merge_inputs,
                 output_name="merged_mail_attachment.pdf",
                 error_message="Error while merging email PDF with attachment block",
             )

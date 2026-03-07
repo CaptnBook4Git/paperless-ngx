@@ -641,6 +641,42 @@ class TestAPIMailRules(DirectoriesMixin, APITestCase):
             MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
         )
 
+    def test_mail_rule_consumption_scope_modes_round_trip(self) -> None:
+        account = MailAccount.objects.create(
+            name="Email1",
+            username="username1",
+            password="password1",
+            imap_server="server.example.com",
+            imap_port=443,
+            imap_security=MailAccount.ImapSecurity.SSL,
+            character_set="UTF-8",
+        )
+
+        expected_scopes = [
+            MailRule.ConsumptionScope.ATTACHMENTS_ONLY,
+            MailRule.ConsumptionScope.EML_ONLY,
+            MailRule.ConsumptionScope.EVERYTHING,
+            MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
+        ]
+
+        for order, scope in enumerate(expected_scopes):
+            MailRule.objects.create(
+                name=f"Rule{order + 1}",
+                account=account,
+                order=order,
+                consumption_scope=scope,
+            )
+
+        response = self.client.get(self.ENDPOINT)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 4)
+        returned_scopes = [
+            rule["consumption_scope"]
+            for rule in sorted(response.data["results"], key=lambda r: r["order"])
+        ]
+        self.assertEqual(returned_scopes, expected_scopes)
+
     def test_get_mail_rules_owner_aware(self) -> None:
         """
         GIVEN:
