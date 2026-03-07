@@ -762,3 +762,73 @@ class TestParser:
 
         # 4 = MailRule.PdfLayout.TEXT_ONLY
         test_layout_option(4, 1, ["email_as_pdf.pdf"])
+
+    def test_stage_cid_resources_and_rewrite_html_variants(
+        self,
+        mail_parser: MailDocumentParser,
+        html_email_file: Path,
+    ) -> None:
+        """
+        GIVEN:
+            - HTML with multiple CID variants pointing to the same inline attachment
+        WHEN:
+            - CID resources are staged and HTML is rewritten
+        THEN:
+            - All CID variants resolve to a local staged resource name
+        """
+        msg = mail_parser.parse_file_to_message(html_email_file)
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        html_with_variants = (
+            '<img src="CID:part1.pNdUSz0s.D3NqVtPg@example.de">'
+            '<img src="cid:<part1.pNdUSz0s.D3NqVtPg@example.de>">'
+            '<img src="cid:part1.pNdUSz0s.D3NqVtPg%40example.de">'
+        )
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            html_with_variants,
+            msg.attachments,
+        )
+
+        expected_resource_name = "part1pNdUSz0sD3NqVtPgexamplede"
+        assert f'src="{expected_resource_name}"' in rewritten
+        assert "CID:part1.pNdUSz0s.D3NqVtPg@example.de" not in rewritten
+        assert "cid:<part1.pNdUSz0s.D3NqVtPg@example.de>" not in rewritten
+        assert "cid:part1.pNdUSz0s.D3NqVtPg%40example.de" not in rewritten
+
+        route.resource.assert_called_once()
+        staged_resource = route.resource.call_args.args[0]
+        assert staged_resource.name == expected_resource_name
+        assert staged_resource.exists()
+
+    def test_stage_cid_resources_ignores_non_matching_cids(
+        self,
+        mail_parser: MailDocumentParser,
+        html_email_file: Path,
+    ) -> None:
+        """
+        GIVEN:
+            - HTML with CID references not present in attachments
+        WHEN:
+            - CID resources are staged and HTML is rewritten
+        THEN:
+            - Non-matching references are unchanged
+        """
+        msg = mail_parser.parse_file_to_message(html_email_file)
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        original_html = '<img src="cid:not-found@example.de">'
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            original_html,
+            msg.attachments,
+        )
+
+        assert rewritten == original_html
+        route.resource.assert_called_once()

@@ -1,6 +1,7 @@
 import re
 from html import escape
 from pathlib import Path
+from urllib.parse import unquote
 
 from bleach import clean
 from bleach import linkify
@@ -456,21 +457,12 @@ class MailDocumentParser(DocumentParser):
             if pdf_a_format is not None:
                 route.pdf_format(pdf_a_format)
 
-            # Add attachments as resources, cleaning the filename and replacing
-            # it in the index file for inclusion
-            for attachment in attachments:
-                # Clean the attachment name to be valid
-                name_cid = f"cid:{attachment.content_id}"
-                name_clean = "".join(e for e in name_cid if e.isalnum())
-
-                # Write attachment payload to a temp file
-                temp_file = tempdir / name_clean
-                temp_file.write_bytes(attachment.payload)
-
-                route.resource(temp_file)
-
-                # Replace as needed the name with the clean name
-                html_clean = html_clean.replace(name_cid, name_clean)
+            html_clean = self._stage_cid_resources_and_rewrite_html(
+                route,
+                tempdir,
+                html_clean,
+                attachments,
+            )
 
             # Now store the cleaned up HTML version
             html_clean_file = tempdir / "index.html"
@@ -499,6 +491,70 @@ class MailDocumentParser(DocumentParser):
         html_pdf = tempdir / "html.pdf"
         html_pdf.write_bytes(response.content)
         return html_pdf
+
+    @staticmethod
+    def _normalize_cid_value(value: str) -> str:
+        value = value.strip()
+        if value.lower().startswith("cid:"):
+            value = value[4:]
+        value = unquote(value)
+        value = value.strip().strip("<>")
+        return value
+
+    @staticmethod
+    def _safe_cid_resource_name(cid: str, used_names: set[str]) -> str:
+        safe_name = "".join(char for char in cid if char.isalnum())
+        if not safe_name:
+            safe_name = "cidresource"
+
+        original_name = safe_name
+        suffix = 1
+        while safe_name in used_names:
+            suffix += 1
+            safe_name = f"{original_name}{suffix}"
+
+        used_names.add(safe_name)
+        return safe_name
+
+    def _stage_cid_resources_and_rewrite_html(
+        self,
+        route,
+        tempdir: Path,
+        html_clean: str,
+        attachments: list[MailAttachment],
+    ) -> str:
+        cid_to_resource: dict[str, str] = {}
+        used_names: set[str] = set()
+
+        for attachment in attachments:
+            if not attachment.content_id:
+                continue
+
+            normalized_cid = self._normalize_cid_value(attachment.content_id)
+            if not normalized_cid:
+                continue
+
+            if normalized_cid in cid_to_resource:
+                continue
+
+            resource_name = self._safe_cid_resource_name(normalized_cid, used_names)
+            temp_file = tempdir / resource_name
+            temp_file.write_bytes(attachment.payload)
+
+            route.resource(temp_file)
+            cid_to_resource[normalized_cid] = resource_name
+
+        if not cid_to_resource:
+            return html_clean
+
+        cid_pattern = re.compile(r"(?i)cid:(<[^>]+>|[^\"'\s>]+)")
+
+        def replace_cid(match: re.Match[str]) -> str:
+            cid_reference = match.group(1)
+            normalized_reference = self._normalize_cid_value(cid_reference)
+            return cid_to_resource.get(normalized_reference, match.group(0))
+
+        return cid_pattern.sub(replace_cid, html_clean)
 
     def get_settings(self) -> None:
         """
