@@ -1868,6 +1868,10 @@ msgstr "email account"
 msgid "mail accounts"
 msgstr "email accounts"
 
+#: paperless_mail/models.py:113
+msgid "Convert full Mail to PDF and merge all eligible PDF attachments into a single document"
+msgstr "Volledige e-mail naar PDF converteren en alle geschikte PDF-bijlagen samenvoegen tot één document"
+
 #: paperless_mail/models.py:14
 msgid "No encryption"
 msgstr "Geen versleuteling"

@@ -1963,6 +1963,10 @@ msgstr "Traiter le courriel entier (dont les pièces jointes comme fichier) en t
 msgid "Process full Mail (with embedded attachments in file) as .eml + process attachments as separate documents"
 msgstr "Traiter le courriel entier (dont les pièces jointes intégrées comme fichier) en .eml + traiter les pièces jointes comme des documents séparés"
 
+#: paperless_mail/models.py:113
+msgid "Convert full Mail to PDF and merge all eligible PDF attachments into a single document"
+msgstr "Convertir le courriel complet en PDF et fusionner toutes les pièces jointes PDF admissibles dans un seul document"
+
 #: paperless_mail/models.py:116
 msgid "Process all files, including 'inline' attachments."
 msgstr "Traiter tous les fichiers, y compris les pièces jointes \"en ligne\"."

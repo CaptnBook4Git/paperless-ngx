@@ -826,6 +826,59 @@ class MailAccountHandler(LoggingMixin):
 
         return Path(temp_filename)
 
+    def _get_combined_pdf_metadata(
+        self,
+        message: MailMessage,
+        pdf_attachments: list[MailAttachment],
+        rule: MailRule,
+    ) -> tuple[str | None, str]:
+        representative_attachment = (
+            pdf_attachments[0] if len(pdf_attachments) == 1 else None
+        )
+
+        if representative_attachment is not None:
+            filename = pathvalidate.sanitize_filename(representative_attachment.filename)
+            if not filename:
+                filename = "mail-attachment.pdf"
+        else:
+            subject = pathvalidate.sanitize_filename(message.subject or "")
+            if not subject:
+                subject = "mail-message"
+            filename = f"{subject}.pdf"
+
+        match rule.assign_title_from:
+            case MailRule.TitleSource.FROM_FILENAME:
+                title = Path(filename).stem
+            case MailRule.TitleSource.FROM_SUBJECT:
+                title = message.subject
+            case MailRule.TitleSource.NONE | _:
+                title = None
+
+        return title, filename
+
+    def _write_combined_pdf_attachments(
+        self,
+        parser: MailDocumentParser,
+        attachments: list[MailAttachment],
+    ) -> list[Path]:
+        attachment_paths: list[Path] = []
+
+        for index, attachment in enumerate(attachments):
+            sanitized_name = pathvalidate.sanitize_filename(attachment.filename)
+            if not sanitized_name:
+                sanitized_name = f"mail-attachment-{index + 1}.pdf"
+
+            attachment_path = Path(parser.tempdir) / sanitized_name
+            if attachment_path.exists():
+                attachment_path = attachment_path.with_name(
+                    f"{attachment_path.stem}-{index + 1}{attachment_path.suffix}",
+                )
+
+            attachment_path.write_bytes(attachment.payload)
+            attachment_paths.append(attachment_path)
+
+        return attachment_paths
+
     def filename_inclusion_matches(
         self,
         filter_attachment_filename_include: str | None,
@@ -979,7 +1032,6 @@ class MailAccountHandler(LoggingMixin):
         doc_type,
     ) -> int:
         eligible_pdf_attachments: list[MailAttachment] = []
-        requires_fallback_to_eml = False
 
         for att in message.attachments:
             if not self._attachment_matches_rule(att, rule):
@@ -987,54 +1039,44 @@ class MailAccountHandler(LoggingMixin):
 
             mime_type = magic.from_buffer(att.payload, mime=True)
             if mime_type != "application/pdf" or not is_mime_type_supported(mime_type):
-                requires_fallback_to_eml = True
                 self.log.debug(
                     f"Rule {rule}: "
-                    f"Combined mode requires exactly one eligible PDF attachment, "
-                    f"falling back to .eml-only consumption because {att.filename} "
-                    f"has mime type {mime_type}",
+                    f"Skipping attachment {att.filename} in combined mode because "
+                    f"mime type {mime_type} is not an eligible PDF",
                 )
                 continue
 
             eligible_pdf_attachments.append(att)
 
-        if requires_fallback_to_eml or len(eligible_pdf_attachments) != 1:
-            self.log.debug(
-                f"Rule {rule}: Combined mode found "
-                f"{len(eligible_pdf_attachments)} eligible PDF attachment(s); "
-                "falling back to .eml-only consumption",
-            )
-            return self._process_eml(
-                message,
-                rule,
-                tag_ids,
-                doc_type,
-            )
-
-        attachment = eligible_pdf_attachments[0]
         parser = MailDocumentParser(logging_group=self.logging_group)
         eml_filename = self._write_message_to_temp_eml(message)
         mail_pdf = parser.generate_pdf_from_eml(eml_filename, rule.pdf_layout)
 
-        sanitized_attachment_name = pathvalidate.sanitize_filename(attachment.filename)
-        if not sanitized_attachment_name:
-            sanitized_attachment_name = "mail-attachment.pdf"
-
-        attachment_path = Path(parser.tempdir) / sanitized_attachment_name
-        attachment_path.write_bytes(attachment.payload)
-        merged_pdf = parser.merge_pdfs(
-            [mail_pdf, attachment_path],
-            output_name="merged_mail_attachment.pdf",
-            error_message="Error while merging email PDF with attachment",
+        attachment_paths = self._write_combined_pdf_attachments(
+            parser,
+            eligible_pdf_attachments,
         )
 
+        if attachment_paths:
+            merged_pdf = parser.merge_pdfs(
+                [mail_pdf, *attachment_paths],
+                output_name="merged_mail_attachment.pdf",
+                error_message="Error while merging email PDF with attachment block",
+            )
+        else:
+            merged_pdf = mail_pdf
+
         correspondent = self._get_correspondent(message, rule)
-        title = self._get_title(message, attachment, rule)
+        title, output_filename = self._get_combined_pdf_metadata(
+            message,
+            eligible_pdf_attachments,
+            rule,
+        )
 
         self.log.info(
             f"Rule {rule}: "
             f"Consuming merged PDF for mail {message.subject} from {message.from_} "
-            f"with attachment {attachment.filename}",
+            f"with {len(eligible_pdf_attachments)} eligible PDF attachment(s)",
         )
 
         input_doc = ConsumableDocument(
@@ -1043,7 +1085,7 @@ class MailAccountHandler(LoggingMixin):
         )
         doc_overrides = DocumentMetadataOverrides(
             title=title,
-            filename=sanitized_attachment_name,
+            filename=output_filename,
             correspondent_id=correspondent.id if correspondent else None,
             document_type_id=doc_type.id if doc_type else None,
             tag_ids=tag_ids,

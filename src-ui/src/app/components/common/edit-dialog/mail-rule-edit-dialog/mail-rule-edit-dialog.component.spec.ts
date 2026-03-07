@@ -9,6 +9,7 @@ import {
   MailAction,
   MailMetadataCorrespondentOption,
   MailRuleConsumptionScope,
+  MailRulePdfLayout,
 } from 'src/app/data/mail-rule'
 import { IfOwnerDirective } from 'src/app/directives/if-owner.directive'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
@@ -120,6 +121,34 @@ describe('MailRuleEditDialogComponent', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: MailRuleConsumptionScope.CombinedPdfAttachment,
+        }),
+      ])
+    )
+  })
+
+  it('should relabel PDF layout options for combined mode', () => {
+    expect(component.pdfLayoutOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: MailRulePdfLayout.TextHtml,
+          name: 'Text, then HTML',
+        }),
+      ])
+    )
+
+    component.objectForm
+      .get('consumption_scope')
+      .setValue(MailRuleConsumptionScope.CombinedPdfAttachment)
+
+    expect(component.pdfLayoutOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: MailRulePdfLayout.TextHtml,
+          name: 'Text, then HTML, then attachments',
+        }),
+        expect.objectContaining({
+          id: MailRulePdfLayout.Default,
+          name: 'System default (attachments last)',
         }),
       ])
     )

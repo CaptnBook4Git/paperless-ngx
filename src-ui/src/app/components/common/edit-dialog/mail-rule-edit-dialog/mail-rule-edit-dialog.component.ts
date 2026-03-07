@@ -58,7 +58,7 @@ const CONSUMPTION_SCOPE_OPTIONS = [
   },
   {
     id: MailRuleConsumptionScope.CombinedPdfAttachment,
-    name: $localize`Convert message to PDF and merge exactly one eligible PDF attachment`,
+    name: $localize`Convert message to PDF and merge all eligible PDF attachments`,
   },
 ]
 
@@ -82,6 +82,29 @@ const PDF_LAYOUT_OPTIONS = [
   {
     id: MailRulePdfLayout.TextOnly,
     name: $localize`Text only`,
+  },
+]
+
+const COMBINED_PDF_LAYOUT_OPTIONS = [
+  {
+    id: MailRulePdfLayout.Default,
+    name: $localize`System default (attachments last)`,
+  },
+  {
+    id: MailRulePdfLayout.TextHtml,
+    name: $localize`Text, then HTML, then attachments`,
+  },
+  {
+    id: MailRulePdfLayout.HtmlText,
+    name: $localize`HTML, then text, then attachments`,
+  },
+  {
+    id: MailRulePdfLayout.HtmlOnly,
+    name: $localize`HTML only, then attachments`,
+  },
+  {
+    id: MailRulePdfLayout.TextOnly,
+    name: $localize`Text only, then attachments`,
   },
 ]
 
@@ -265,6 +288,9 @@ export class MailRuleEditDialogComponent extends EditDialogComponent<MailRule> {
   }
 
   get pdfLayoutOptions() {
-    return PDF_LAYOUT_OPTIONS
+    return this.objectForm?.get('consumption_scope')?.value ===
+      MailRuleConsumptionScope.CombinedPdfAttachment
+      ? COMBINED_PDF_LAYOUT_OPTIONS
+      : PDF_LAYOUT_OPTIONS
   }
 }

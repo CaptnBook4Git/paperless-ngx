@@ -658,7 +658,7 @@ class TestMail(
         result = self.mail_account_handler._handle_message(message, rule)
 
         self.assertEqual(result, 1)
-        mock_generate_pdf_from_eml.assert_called_once()
+        mock_generate_pdf_from_eml.assert_called_once_with(mock.ANY, rule.pdf_layout)
         mock_merge_pdfs.assert_called_once()
 
         merge_args = mock_merge_pdfs.call_args.args[0]
@@ -680,7 +680,7 @@ class TestMail(
 
     @mock.patch("paperless_mail.mail.MailDocumentParser.merge_pdfs")
     @mock.patch("paperless_mail.mail.MailDocumentParser.generate_pdf_from_eml")
-    def test_handle_combined_mode_falls_back_for_ambiguous_attachments(
+    def test_handle_combined_mode_merges_multiple_pdf_attachments(
         self,
         mock_generate_pdf_from_eml: mock.Mock,
         mock_merge_pdfs: mock.Mock,
@@ -690,6 +690,7 @@ class TestMail(
             from_="Myself",
             attachments=[
                 _AttachmentDef(filename="f1.pdf"),
+                _AttachmentDef(filename="f2.pdf"),
                 _AttachmentDef(
                     filename="f2.png",
                     maintype="image",
@@ -699,9 +700,71 @@ class TestMail(
             ],
         )
 
+        mail_pdf = self.dirs.scratch_dir / "mail.pdf"
+        mail_pdf.write_bytes(b"PDF mail")
+        merged_pdf = self.dirs.scratch_dir / "merged.pdf"
+        merged_pdf.write_bytes(b"PDF merged")
+        mock_generate_pdf_from_eml.return_value = mail_pdf
+        mock_merge_pdfs.return_value = merged_pdf
+
         account = MailAccount.objects.create()
         rule = MailRule.objects.create(
             assign_title_from=MailRule.TitleSource.FROM_FILENAME,
+            consumption_scope=MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
+            account=account,
+            pdf_layout=MailRule.PdfLayout.HTML_TEXT,
+        )
+
+        result = self.mail_account_handler._handle_message(message, rule)
+
+        self.assertEqual(result, 1)
+        mock_generate_pdf_from_eml.assert_called_once_with(mock.ANY, rule.pdf_layout)
+        mock_merge_pdfs.assert_called_once()
+
+        merge_args = mock_merge_pdfs.call_args.args[0]
+        self.assertEqual(
+            [path.name for path in merge_args],
+            ["mail.pdf", "f1.pdf", "f2.pdf"],
+        )
+
+        self.mailMocker.assert_queue_consumption_tasks_call_args(
+            [
+                [
+                    {
+                        "override_title": "the message title",
+                        "override_filename": "the message title.pdf",
+                    },
+                ],
+            ],
+        )
+
+    @mock.patch("paperless_mail.mail.MailDocumentParser.merge_pdfs")
+    @mock.patch("paperless_mail.mail.MailDocumentParser.generate_pdf_from_eml")
+    def test_handle_combined_mode_uses_mail_pdf_when_no_pdf_attachments_match(
+        self,
+        mock_generate_pdf_from_eml: mock.Mock,
+        mock_merge_pdfs: mock.Mock,
+    ) -> None:
+        message = self.mailMocker.messageBuilder.create_message(
+            subject="the message title",
+            from_="Myself",
+            attachments=[
+                _AttachmentDef(
+                    filename="f1.png",
+                    maintype="image",
+                    subtype="png",
+                    content=b"not a PDF",
+                ),
+            ],
+        )
+
+        mail_pdf = self.dirs.scratch_dir / "mail.pdf"
+        mail_pdf.write_bytes(b"PDF mail")
+        mock_generate_pdf_from_eml.return_value = mail_pdf
+
+        account = MailAccount.objects.create()
+        rule = MailRule.objects.create(
+            assign_title_from=MailRule.TitleSource.FROM_SUBJECT,
             consumption_scope=MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT,
             account=account,
         )
@@ -709,14 +772,14 @@ class TestMail(
         result = self.mail_account_handler._handle_message(message, rule)
 
         self.assertEqual(result, 1)
-        mock_generate_pdf_from_eml.assert_not_called()
+        mock_generate_pdf_from_eml.assert_called_once_with(mock.ANY, rule.pdf_layout)
         mock_merge_pdfs.assert_not_called()
         self.mailMocker.assert_queue_consumption_tasks_call_args(
             [
                 [
                     {
                         "override_title": "the message title",
-                        "override_filename": "the message title.eml",
+                        "override_filename": "the message title.pdf",
                     },
                 ],
             ],

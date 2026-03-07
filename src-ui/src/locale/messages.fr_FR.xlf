@@ -4606,6 +4606,14 @@
         </context-group>
         <target state="final">Traiter le message comme un .eml et les pièces jointes séparément</target>
       </trans-unit>
+      <trans-unit id="1651782016808142801" datatype="html" approved="yes">
+        <source>Convert message to PDF and merge all eligible PDF attachments</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">61</context>
+        </context-group>
+        <target state="final">Convertir le message en PDF et fusionner toutes les pièces jointes PDF admissibles</target>
+      </trans-unit>
       <trans-unit id="8776300244268604360" datatype="html">
         <source>System default</source>
         <context-group purpose="location">
@@ -4613,6 +4621,14 @@
           <context context-type="linenumber">64</context>
         </context-group>
         <target state="translated">Valeurs par défaut du système</target>
+      </trans-unit>
+      <trans-unit id="6027384115096003451" datatype="html" approved="yes">
+        <source>System default (attachments last)</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">87</context>
+        </context-group>
+        <target state="final">Valeurs par défaut du système (pièces jointes à la fin)</target>
       </trans-unit>
       <trans-unit id="4812910224365219000" datatype="html">
         <source>Text, then HTML</source>
@@ -4622,6 +4638,14 @@
         </context-group>
         <target state="translated">Texte, puis HTML</target>
       </trans-unit>
+      <trans-unit id="5612311120099011123" datatype="html" approved="yes">
+        <source>Text, then HTML, then attachments</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">91</context>
+        </context-group>
+        <target state="final">Texte, puis HTML, puis les pièces jointes</target>
+      </trans-unit>
       <trans-unit id="3181744476823286470" datatype="html">
         <source>HTML, then text</source>
         <context-group purpose="location">
@@ -4629,6 +4653,14 @@
           <context context-type="linenumber">72</context>
         </context-group>
         <target state="translated">HTML, puis texte</target>
+      </trans-unit>
+      <trans-unit id="8612297744109131160" datatype="html" approved="yes">
+        <source>HTML, then text, then attachments</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">95</context>
+        </context-group>
+        <target state="final">HTML, puis texte, puis les pièces jointes</target>
       </trans-unit>
       <trans-unit id="9048933760263399623" datatype="html">
         <source>HTML only</source>
@@ -4638,6 +4670,14 @@
         </context-group>
         <target state="translated">HTML uniquement</target>
       </trans-unit>
+      <trans-unit id="4201145309513322108" datatype="html" approved="yes">
+        <source>HTML only, then attachments</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">99</context>
+        </context-group>
+        <target state="final">HTML uniquement, puis les pièces jointes</target>
+      </trans-unit>
       <trans-unit id="3835211125655594627" datatype="html">
         <source>Text only</source>
         <context-group purpose="location">
@@ -4645,6 +4685,14 @@
           <context context-type="linenumber">80</context>
         </context-group>
         <target state="translated">Texte uniquement</target>
+      </trans-unit>
+      <trans-unit id="3267011447859912045" datatype="html" approved="yes">
+        <source>Text only, then attachments</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">103</context>
+        </context-group>
+        <target state="final">Texte uniquement, puis les pièces jointes</target>
       </trans-unit>
       <trans-unit id="2784260611081866636" datatype="html" approved="yes">
         <source>Move to specified folder</source>

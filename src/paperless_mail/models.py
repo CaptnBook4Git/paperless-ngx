@@ -113,8 +113,8 @@ class MailRule(document_models.ModelWithOwner):
         MERGED_EMAIL_AND_ATTACHMENT = (
             4,
             _(
-                "Convert full Mail to PDF and merge exactly one eligible PDF "
-                "attachment into a single document",
+                "Convert full Mail to PDF and merge all eligible PDF "
+                "attachments into a single document",
             ),
         )
 
