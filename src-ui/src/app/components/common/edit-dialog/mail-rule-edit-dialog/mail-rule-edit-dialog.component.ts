@@ -58,7 +58,7 @@ const CONSUMPTION_SCOPE_OPTIONS = [
   },
   {
     id: MailRuleConsumptionScope.CombinedPdfAttachment,
-    name: $localize`Convert message to PDF and merge all eligible PDF attachments`,
+    name: $localize`:@@mailRuleConsumptionScopeMergeEmailWithAttachment:Merge Email with Attachment`,
   },
 ]
 

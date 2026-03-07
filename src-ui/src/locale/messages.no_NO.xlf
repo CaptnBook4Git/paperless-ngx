@@ -4606,6 +4606,14 @@
         </context-group>
         <target state="translated">Behandle melding som .eml og vedlegg separat</target>
       </trans-unit>
+      <trans-unit id="mailRuleConsumptionScopeMergeEmailWithAttachment" datatype="html">
+        <source>Merge Email with Attachment</source>
+        <context-group purpose="location">
+          <context context-type="sourcefile">src/app/components/common/edit-dialog/mail-rule-edit-dialog/mail-rule-edit-dialog.component.ts</context>
+          <context context-type="linenumber">61</context>
+        </context-group>
+        <target state="translated">Merge Email with Attachment</target>
+      </trans-unit>
       <trans-unit id="8776300244268604360" datatype="html">
         <source>System default</source>
         <context-group purpose="location">

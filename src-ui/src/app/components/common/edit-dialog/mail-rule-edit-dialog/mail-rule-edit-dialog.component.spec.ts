@@ -121,6 +121,7 @@ describe('MailRuleEditDialogComponent', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: MailRuleConsumptionScope.CombinedPdfAttachment,
+          name: 'Merge Email with Attachment',
         }),
       ])
     )
