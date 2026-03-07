@@ -2,6 +2,7 @@ import re
 from html import escape
 from pathlib import Path
 from urllib.parse import unquote
+from urllib.parse import urlsplit
 
 from bleach import clean
 from bleach import linkify
@@ -502,6 +503,28 @@ class MailDocumentParser(DocumentParser):
         return value
 
     @staticmethod
+    def _normalize_attachment_reference(value: str) -> str:
+        value = unquote(value.strip().strip("<>").strip())
+        if value.lower().startswith("cid:"):
+            value = value[4:]
+        return value.strip().strip("<>").strip()
+
+    def _attachment_reference_candidates(self, value: str) -> set[str]:
+        normalized = self._normalize_attachment_reference(value)
+        if not normalized:
+            return set()
+
+        candidates = {normalized}
+
+        parsed = urlsplit(normalized)
+        path = parsed.path if parsed.path else normalized
+        basename = Path(path).name
+        if basename:
+            candidates.add(basename)
+
+        return candidates
+
+    @staticmethod
     def _safe_cid_resource_name(cid: str, used_names: set[str]) -> str:
         safe_name = "".join(char for char in cid if char.isalnum())
         if not safe_name:
@@ -524,27 +547,71 @@ class MailDocumentParser(DocumentParser):
         attachments: list[MailAttachment],
     ) -> str:
         cid_to_resource: dict[str, str] = {}
+        reference_to_resource: dict[str, str] = {}
         used_names: set[str] = set()
 
         for attachment in attachments:
-            if not attachment.content_id:
+            content_id = getattr(attachment, "content_id", None)
+            content_location = getattr(attachment, "content_location", None)
+            filename = getattr(attachment, "filename", None)
+
+            resource_candidates: set[str] = set()
+            if content_id:
+                normalized_cid = self._normalize_cid_value(content_id)
+                if normalized_cid:
+                    resource_candidates.add(normalized_cid)
+            if content_location:
+                resource_candidates.update(
+                    self._attachment_reference_candidates(content_location),
+                )
+            if filename:
+                resource_candidates.update(
+                    self._attachment_reference_candidates(filename),
+                )
+
+            if not resource_candidates:
                 continue
 
-            normalized_cid = self._normalize_cid_value(attachment.content_id)
-            if not normalized_cid:
+            existing_resource_name = next(
+                (
+                    reference_to_resource[candidate]
+                    for candidate in resource_candidates
+                    if candidate in reference_to_resource
+                ),
+                None,
+            )
+
+            if existing_resource_name is not None:
+                for candidate in resource_candidates:
+                    reference_to_resource.setdefault(candidate, existing_resource_name)
+                if content_id:
+                    normalized_cid = self._normalize_cid_value(content_id)
+                    if normalized_cid:
+                        cid_to_resource[normalized_cid] = existing_resource_name
                 continue
 
-            if normalized_cid in cid_to_resource:
-                continue
-
-            resource_name = self._safe_cid_resource_name(normalized_cid, used_names)
+            resource_name_seed = next(
+                (
+                    candidate
+                    for candidate in resource_candidates
+                    if "@" in candidate or "." in candidate
+                ),
+                next(iter(resource_candidates)),
+            )
+            resource_name = self._safe_cid_resource_name(resource_name_seed, used_names)
             temp_file = tempdir / resource_name
             temp_file.write_bytes(attachment.payload)
 
             route.resource(temp_file)
-            cid_to_resource[normalized_cid] = resource_name
+            for candidate in resource_candidates:
+                reference_to_resource[candidate] = resource_name
 
-        if not cid_to_resource:
+            if content_id:
+                normalized_cid = self._normalize_cid_value(content_id)
+                if normalized_cid:
+                    cid_to_resource[normalized_cid] = resource_name
+
+        if not reference_to_resource:
             return html_clean
 
         cid_pattern = re.compile(r"(?i)cid:(<[^>]+>|[^\"'\s>]+)")
@@ -554,7 +621,42 @@ class MailDocumentParser(DocumentParser):
             normalized_reference = self._normalize_cid_value(cid_reference)
             return cid_to_resource.get(normalized_reference, match.group(0))
 
-        return cid_pattern.sub(replace_cid, html_clean)
+        rewritten_html = cid_pattern.sub(replace_cid, html_clean)
+        img_attr_pattern = re.compile(
+            r"(?i)(?P<attr>src|srcset)\s*=\s*(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
+        )
+
+        def rewrite_src_value(value: str) -> str:
+            normalized = self._normalize_attachment_reference(value)
+            return reference_to_resource.get(normalized, value)
+
+        def rewrite_srcset_value(value: str) -> str:
+            candidates = []
+            for item in value.split(","):
+                stripped_item = item.strip()
+                if not stripped_item:
+                    continue
+
+                parts = stripped_item.split(None, 1)
+                src_candidate = parts[0]
+                descriptor = f" {parts[1]}" if len(parts) > 1 else ""
+                normalized = self._normalize_attachment_reference(src_candidate)
+                rewritten_candidate = reference_to_resource.get(normalized, src_candidate)
+                candidates.append(f"{rewritten_candidate}{descriptor}")
+
+            return ", ".join(candidates)
+
+        def replace_img_attr(match: re.Match[str]) -> str:
+            attr = match.group("attr")
+            quote = match.group("quote")
+            value = match.group("value")
+            if attr.lower() == "srcset":
+                rewritten_value = rewrite_srcset_value(value)
+            else:
+                rewritten_value = rewrite_src_value(value)
+            return f"{attr}={quote}{rewritten_value}{quote}"
+
+        return img_attr_pattern.sub(replace_img_attr, rewritten_html)
 
     def get_settings(self) -> None:
         """

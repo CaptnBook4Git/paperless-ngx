@@ -832,3 +832,144 @@ class TestParser:
 
         assert rewritten == original_html
         route.resource.assert_called_once()
+
+    def test_stage_resources_rewrites_content_location_reference(
+        self,
+        mail_parser: MailDocumentParser,
+    ) -> None:
+        """
+        GIVEN:
+            - Attachment with a content-location
+        WHEN:
+            - HTML src references that content-location path
+        THEN:
+            - The src URL is rewritten to the staged local resource name
+        """
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        attachment = mock.Mock(
+            content_id=None,
+            content_location="https://example.invalid/assets/mail/logo.png",
+            filename="logo.png",
+            payload=b"inline-image",
+        )
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            '<img src="https://example.invalid/assets/mail/logo.png">',
+            [attachment],
+        )
+
+        staged_resource = route.resource.call_args.args[0]
+        assert rewritten == f'<img src="{staged_resource.name}">'
+        route.resource.assert_called_once()
+
+    def test_stage_resources_rewrites_filename_reference(
+        self,
+        mail_parser: MailDocumentParser,
+    ) -> None:
+        """
+        GIVEN:
+            - Attachment with a filename alias
+        WHEN:
+            - HTML src references the filename
+        THEN:
+            - The src URL is rewritten to the staged local resource name
+        """
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        attachment = mock.Mock(
+            content_id=None,
+            content_location=None,
+            filename="signature-image.jpg",
+            payload=b"inline-image",
+        )
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            '<img src="signature-image.jpg">',
+            [attachment],
+        )
+
+        staged_resource = route.resource.call_args.args[0]
+        assert rewritten == f'<img src="{staged_resource.name}">'
+        route.resource.assert_called_once()
+
+    def test_stage_resources_rewrites_srcset_candidates(
+        self,
+        mail_parser: MailDocumentParser,
+    ) -> None:
+        """
+        GIVEN:
+            - Attachment aliases present in srcset candidates
+        WHEN:
+            - HTML srcset contains matching and non-matching candidates
+        THEN:
+            - Only matching srcset candidates are rewritten
+        """
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        attachment = mock.Mock(
+            content_id=None,
+            content_location="/assets/banner@2x.png",
+            filename="banner@2x.png",
+            payload=b"inline-image",
+        )
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            '<img srcset="banner@2x.png 2x, https://cdn.example.invalid/banner@3x.png 3x">',
+            [attachment],
+        )
+
+        staged_resource = route.resource.call_args.args[0]
+        expected = (
+            f'<img srcset="{staged_resource.name} 2x, '
+            'https://cdn.example.invalid/banner@3x.png 3x">'
+        )
+        assert rewritten == expected
+        route.resource.assert_called_once()
+
+    def test_stage_resources_non_match_safety_keeps_external_links(
+        self,
+        mail_parser: MailDocumentParser,
+    ) -> None:
+        """
+        GIVEN:
+            - Attachment aliases that do not match external URLs
+        WHEN:
+            - HTML contains external src and srcset references
+        THEN:
+            - Non-matching references remain unchanged
+        """
+        route = mock.Mock()
+        tempdir = Path(mail_parser.tempdir)
+
+        attachment = mock.Mock(
+            content_id=None,
+            content_location="/assets/local-only.png",
+            filename="local-only.png",
+            payload=b"inline-image",
+        )
+
+        original_html = (
+            '<img src="https://example.invalid/unrelated.png" '
+            'srcset="https://example.invalid/unrelated.png 1x, '
+            'https://example.invalid/unrelated@2x.png 2x">'
+        )
+
+        rewritten = mail_parser._stage_cid_resources_and_rewrite_html(
+            route,
+            tempdir,
+            original_html,
+            [attachment],
+        )
+
+        assert rewritten == original_html
+        route.resource.assert_called_once()
