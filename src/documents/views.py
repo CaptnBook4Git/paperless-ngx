@@ -82,6 +82,7 @@ from rest_framework import serializers
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.filters import SearchFilter
@@ -157,7 +158,6 @@ from documents.models import UiSettings
 from documents.models import Workflow
 from documents.models import WorkflowAction
 from documents.models import WorkflowTrigger
-from documents.parsers import get_parser_class_for_mime_type
 from documents.permissions import AcknowledgeTasksPermissions
 from documents.permissions import PaperlessAdminPermissions
 from documents.permissions import PaperlessNotePermissions
@@ -176,14 +176,20 @@ from documents.serialisers import BulkEditObjectsSerializer
 from documents.serialisers import BulkEditSerializer
 from documents.serialisers import CorrespondentSerializer
 from documents.serialisers import CustomFieldSerializer
+from documents.serialisers import DeleteDocumentsSerializer
 from documents.serialisers import DocumentListSerializer
 from documents.serialisers import DocumentSerializer
 from documents.serialisers import DocumentTypeSerializer
 from documents.serialisers import DocumentVersionLabelSerializer
 from documents.serialisers import DocumentVersionSerializer
+from documents.serialisers import EditPdfDocumentsSerializer
 from documents.serialisers import EmailSerializer
+from documents.serialisers import MergeDocumentsSerializer
 from documents.serialisers import NotesSerializer
 from documents.serialisers import PostDocumentSerializer
+from documents.serialisers import RemovePasswordDocumentsSerializer
+from documents.serialisers import ReprocessDocumentsSerializer
+from documents.serialisers import RotateDocumentsSerializer
 from documents.serialisers import RunTaskViewSerializer
 from documents.serialisers import SavedViewSerializer
 from documents.serialisers import SearchResultSerializer
@@ -219,6 +225,7 @@ from paperless.celery import app as celery_app
 from paperless.config import AIConfig
 from paperless.config import GeneralConfig
 from paperless.models import ApplicationConfiguration
+from paperless.parsers.registry import get_parser_registry
 from paperless.serialisers import GroupSerializer
 from paperless.serialisers import UserSerializer
 from paperless.views import StandardPagination
@@ -549,7 +556,9 @@ class TagViewSet(PermissionsAwareDocumentCountMixin, ModelViewSet):
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
         response = self.get_paginated_response(serializer.data)
-        if descendant_pks:
+        response.data["display_count"] = len(children_source)
+        api_version = int(request.version or settings.REST_FRAMEWORK["DEFAULT_VERSION"])
+        if descendant_pks and api_version < 10:
             # Include children in the "all" field, if needed
             response.data["all"] = [tag.pk for tag in children_source]
         return response
@@ -829,6 +838,61 @@ class DocumentViewSet(
         "custom_field_",
     )
 
+    def _get_selection_data_for_queryset(self, queryset):
+        correspondents = Correspondent.objects.annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(documents__in=queryset),
+                distinct=True,
+            ),
+        )
+        tags = Tag.objects.annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(documents__in=queryset),
+                distinct=True,
+            ),
+        )
+        document_types = DocumentType.objects.annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(documents__in=queryset),
+                distinct=True,
+            ),
+        )
+        storage_paths = StoragePath.objects.annotate(
+            document_count=Count(
+                "documents",
+                filter=Q(documents__in=queryset),
+                distinct=True,
+            ),
+        )
+        custom_fields = CustomField.objects.annotate(
+            document_count=Count(
+                "fields__document",
+                filter=Q(fields__document__in=queryset),
+                distinct=True,
+            ),
+        )
+
+        return {
+            "selected_correspondents": [
+                {"id": t.id, "document_count": t.document_count} for t in correspondents
+            ],
+            "selected_tags": [
+                {"id": t.id, "document_count": t.document_count} for t in tags
+            ],
+            "selected_document_types": [
+                {"id": t.id, "document_count": t.document_count} for t in document_types
+            ],
+            "selected_storage_paths": [
+                {"id": t.id, "document_count": t.document_count} for t in storage_paths
+            ],
+            "selected_custom_fields": [
+                {"id": t.id, "document_count": t.document_count} for t in custom_fields
+            ],
+        }
+
     def get_queryset(self):
         latest_version_content = Subquery(
             Document.objects.filter(root_document=OuterRef("pk"))
@@ -976,6 +1040,25 @@ class DocumentViewSet(
 
         return response
 
+    def list(self, request, *args, **kwargs):
+        if not get_boolean(
+            str(request.query_params.get("include_selection_data", "false")),
+        ):
+            return super().list(request, *args, **kwargs)
+
+        queryset = self.filter_queryset(self.get_queryset())
+        selection_data = self._get_selection_data_for_queryset(queryset)
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["selection_data"] = selection_data
+            return response
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({"results": serializer.data, "selection_data": selection_data})
+
     def destroy(self, request, *args, **kwargs):
         from documents import index
 
@@ -1075,15 +1158,17 @@ class DocumentViewSet(
         if not Path(file).is_file():
             return None
 
-        parser_class = get_parser_class_for_mime_type(mime_type)
+        parser_class = get_parser_registry().get_parser_for_file(
+            mime_type,
+            Path(file).name,
+            Path(file),
+        )
         if parser_class:
-            parser = parser_class(progress_callback=None, logging_group=None)
-
             try:
-                return parser.extract_metadata(file, mime_type)
+                with parser_class() as parser:
+                    return parser.extract_metadata(file, mime_type)
             except Exception:  # pragma: no cover
                 logger.exception(f"Issue getting metadata for {file}")
-                # TODO: cover GPG errors, remove later.
                 return []
         else:  # pragma: no cover
             logger.warning(f"No parser for {mime_type}")
@@ -1322,6 +1407,7 @@ class DocumentViewSet(
         methods=["get", "post", "delete"],
         detail=True,
         permission_classes=[PaperlessNotePermissions],
+        pagination_class=None,
         filter_backends=[],
     )
     def notes(self, request, pk=None):
@@ -1522,13 +1608,17 @@ class DocumentViewSet(
 
         return Response(sorted(entries, key=lambda x: x["timestamp"], reverse=True))
 
+    @extend_schema(
+        operation_id="documents_email_document",
+        deprecated=True,
+    )
     @action(
         methods=["post"],
         detail=True,
         url_path="email",
         permission_classes=[IsAuthenticated, ViewDocumentsPermissions],
     )
-    # TODO: deprecated as of 2.19, remove in future release
+    # TODO: deprecated, remove with drop of support for API v9
     def email_document(self, request, pk=None):
         request_data = request.data.copy()
         request_data.setlist("documents", [pk])
@@ -1955,11 +2045,28 @@ class UnifiedSearchViewSet(DocumentViewSet):
         filtered_queryset = super().filter_queryset(queryset)
 
         if self._is_search_request():
-            from documents import index
-
             if "query" in self.request.query_params:
+                from documents import index
+
                 query_class = index.DelayedFullTextQuery
             elif "more_like_id" in self.request.query_params:
+                try:
+                    more_like_doc_id = int(self.request.query_params["more_like_id"])
+                    more_like_doc = Document.objects.select_related("owner").get(
+                        pk=more_like_doc_id,
+                    )
+                except (TypeError, ValueError, Document.DoesNotExist):
+                    raise PermissionDenied(_("Invalid more_like_id"))
+
+                if not has_perms_owner_aware(
+                    self.request.user,
+                    "view_document",
+                    more_like_doc,
+                ):
+                    raise PermissionDenied(_("Insufficient permissions."))
+
+                from documents import index
+
                 query_class = index.DelayedMoreLikeThisQuery
             else:
                 raise ValueError
@@ -1992,9 +2099,29 @@ class UnifiedSearchViewSet(DocumentViewSet):
                         else None
                     )
 
+                    if get_boolean(
+                        str(
+                            request.query_params.get(
+                                "include_selection_data",
+                                "false",
+                            ),
+                        ),
+                    ):
+                        result_ids = queryset.get_result_ids()
+                        response.data["selection_data"] = (
+                            self._get_selection_data_for_queryset(
+                                Document.objects.filter(pk__in=result_ids),
+                            )
+                        )
+
                     return response
             except NotFound:
                 raise
+            except PermissionDenied as e:
+                invalid_more_like_id_message = _("Invalid more_like_id")
+                if str(e.detail) == str(invalid_more_like_id_message):
+                    return HttpResponseForbidden(invalid_more_like_id_message)
+                return HttpResponseForbidden(_("Insufficient permissions."))
             except Exception as e:
                 logger.warning(f"An error occurred listing search results: {e!s}")
                 return HttpResponseBadRequest(
@@ -2114,6 +2241,161 @@ class SavedViewViewSet(BulkPermissionMixin, PassUserMixin, ModelViewSet):
     ordering_fields = ("name",)
 
 
+class DocumentSelectionMixin:
+    def _resolve_document_ids(
+        self,
+        *,
+        user: User,
+        validated_data: dict[str, Any],
+        permission_codename: str = "view_document",
+    ) -> list[int]:
+        if not validated_data.get("all", False):
+            # if all is not true, just pass through the provided document ids
+            return validated_data["documents"]
+
+        # otherwise, reconstruct the document list based on the provided filters
+        filters = validated_data.get("filters") or {}
+        permitted_documents = get_objects_for_user_owner_aware(
+            user,
+            permission_codename,
+            Document,
+        )
+        return list(
+            DocumentFilterSet(
+                data=filters,
+                queryset=permitted_documents,
+            )
+            .qs.distinct()
+            .values_list("pk", flat=True),
+        )
+
+
+class DocumentOperationPermissionMixin(PassUserMixin, DocumentSelectionMixin):
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (parsers.JSONParser,)
+    METHOD_NAMES_REQUIRING_USER = {
+        "split",
+        "merge",
+        "rotate",
+        "delete_pages",
+        "edit_pdf",
+        "remove_password",
+    }
+
+    def _has_document_permissions(
+        self,
+        *,
+        user: User,
+        documents: list[int],
+        method,
+        parameters: dict[str, Any],
+    ) -> bool:
+        if user.is_superuser:
+            return True
+
+        document_objs = Document.objects.select_related("owner").filter(
+            pk__in=documents,
+        )
+        user_is_owner_of_all_documents = all(
+            (doc.owner == user or doc.owner is None) for doc in document_objs
+        )
+
+        # check global and object permissions for all documents
+        has_perms = user.has_perm("documents.change_document") and all(
+            has_perms_owner_aware(user, "change_document", doc) for doc in document_objs
+        )
+
+        # check ownership for methods that change original document
+        if (
+            (
+                has_perms
+                and method
+                in [
+                    bulk_edit.set_permissions,
+                    bulk_edit.delete,
+                    bulk_edit.rotate,
+                    bulk_edit.delete_pages,
+                    bulk_edit.edit_pdf,
+                    bulk_edit.remove_password,
+                ]
+            )
+            or (
+                method in [bulk_edit.merge, bulk_edit.split]
+                and parameters.get("delete_originals")
+            )
+            or (method == bulk_edit.edit_pdf and parameters.get("update_document"))
+        ):
+            has_perms = user_is_owner_of_all_documents
+
+        # check global add permissions for methods that create documents
+        if (
+            has_perms
+            and (
+                method in [bulk_edit.split, bulk_edit.merge]
+                or (
+                    method in [bulk_edit.edit_pdf, bulk_edit.remove_password]
+                    and not parameters.get("update_document")
+                )
+            )
+            and not user.has_perm("documents.add_document")
+        ):
+            has_perms = False
+
+        # check global delete permissions for methods that delete documents
+        if (
+            has_perms
+            and (
+                method == bulk_edit.delete
+                or (
+                    method in [bulk_edit.merge, bulk_edit.split]
+                    and parameters.get("delete_originals")
+                )
+            )
+            and not user.has_perm("documents.delete_document")
+        ):
+            has_perms = False
+
+        return has_perms
+
+    def _execute_document_action(
+        self,
+        *,
+        method,
+        validated_data: dict[str, Any],
+        operation_label: str,
+    ):
+        documents = self._resolve_document_ids(
+            user=self.request.user,
+            validated_data=validated_data,
+        )
+        parameters = {
+            k: v
+            for k, v in validated_data.items()
+            if k not in {"documents", "all", "filters"}
+        }
+        user = self.request.user
+
+        if method.__name__ in self.METHOD_NAMES_REQUIRING_USER:
+            parameters["user"] = user
+
+        if not self._has_document_permissions(
+            user=user,
+            documents=documents,
+            method=method,
+            parameters=parameters,
+        ):
+            return HttpResponseForbidden("Insufficient permissions")
+
+        try:
+            result = method(documents, **parameters)
+            return Response({"result": result})
+        except Exception as e:
+            logger.warning(f"An error occurred performing {operation_label}: {e!s}")
+            return HttpResponseBadRequest(
+                f"Error performing {operation_label}, check logs for more detail.",
+            )
+
+
 @extend_schema_view(
     post=extend_schema(
         operation_id="bulk_edit",
@@ -2132,7 +2414,7 @@ class SavedViewViewSet(BulkPermissionMixin, PassUserMixin, ModelViewSet):
         },
     ),
 )
-class BulkEditView(PassUserMixin):
+class BulkEditView(DocumentOperationPermissionMixin):
     MODIFIED_FIELD_BY_METHOD = {
         "set_correspondent": "correspondent",
         "set_document_type": "document_type",
@@ -2154,94 +2436,43 @@ class BulkEditView(PassUserMixin):
         "remove_password": None,
     }
 
-    permission_classes = (IsAuthenticated,)
     serializer_class = BulkEditSerializer
-    parser_classes = (parsers.JSONParser,)
 
     def post(self, request, *args, **kwargs):
+        request_method = request.data.get("method")
+        api_version = int(request.version or settings.REST_FRAMEWORK["DEFAULT_VERSION"])
+        # TODO: remove this and related backwards compatibility code when API v9 is dropped
+        if request_method in BulkEditSerializer.LEGACY_DOCUMENT_ACTION_METHODS:
+            endpoint = BulkEditSerializer.MOVED_DOCUMENT_ACTION_ENDPOINTS[
+                request_method
+            ]
+            logger.warning(
+                "Deprecated bulk_edit method '%s' requested on API version %s. "
+                "Use '%s' instead.",
+                request_method,
+                api_version,
+                endpoint,
+            )
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = self.request.user
         method = serializer.validated_data.get("method")
         parameters = serializer.validated_data.get("parameters")
-        documents = serializer.validated_data.get("documents")
-        if method in [
-            bulk_edit.split,
-            bulk_edit.merge,
-            bulk_edit.rotate,
-            bulk_edit.delete_pages,
-            bulk_edit.edit_pdf,
-            bulk_edit.remove_password,
-        ]:
+        documents = self._resolve_document_ids(
+            user=user,
+            validated_data=serializer.validated_data,
+        )
+        if method.__name__ in self.METHOD_NAMES_REQUIRING_USER:
             parameters["user"] = user
-
-        if not user.is_superuser:
-            document_objs = Document.objects.select_related("owner").filter(
-                pk__in=documents,
-            )
-            user_is_owner_of_all_documents = all(
-                (doc.owner == user or doc.owner is None) for doc in document_objs
-            )
-
-            # check global and object permissions for all documents
-            has_perms = user.has_perm("documents.change_document") and all(
-                has_perms_owner_aware(user, "change_document", doc)
-                for doc in document_objs
-            )
-
-            # check ownership for methods that change original document
-            if (
-                (
-                    has_perms
-                    and method
-                    in [
-                        bulk_edit.set_permissions,
-                        bulk_edit.delete,
-                        bulk_edit.rotate,
-                        bulk_edit.delete_pages,
-                        bulk_edit.edit_pdf,
-                        bulk_edit.remove_password,
-                    ]
-                )
-                or (
-                    method in [bulk_edit.merge, bulk_edit.split]
-                    and parameters["delete_originals"]
-                )
-                or (method == bulk_edit.edit_pdf and parameters["update_document"])
-            ):
-                has_perms = user_is_owner_of_all_documents
-
-            # check global add permissions for methods that create documents
-            if (
-                has_perms
-                and (
-                    method in [bulk_edit.split, bulk_edit.merge]
-                    or (
-                        method in [bulk_edit.edit_pdf, bulk_edit.remove_password]
-                        and not parameters["update_document"]
-                    )
-                )
-                and not user.has_perm("documents.add_document")
-            ):
-                has_perms = False
-
-            # check global delete permissions for methods that delete documents
-            if (
-                has_perms
-                and (
-                    method == bulk_edit.delete
-                    or (
-                        method in [bulk_edit.merge, bulk_edit.split]
-                        and parameters["delete_originals"]
-                    )
-                )
-                and not user.has_perm("documents.delete_document")
-            ):
-                has_perms = False
-
-            if not has_perms:
-                return HttpResponseForbidden("Insufficient permissions")
+        if not self._has_document_permissions(
+            user=user,
+            documents=documents,
+            method=method,
+            parameters=parameters,
+        ):
+            return HttpResponseForbidden("Insufficient permissions")
 
         try:
             modified_field = self.MODIFIED_FIELD_BY_METHOD.get(method.__name__, None)
@@ -2296,6 +2527,168 @@ class BulkEditView(PassUserMixin):
             return HttpResponseBadRequest(
                 "Error performing bulk edit, check logs for more detail.",
             )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_rotate",
+        description="Rotate one or more documents",
+        responses={
+            200: inline_serializer(
+                name="RotateDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class RotateDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = RotateDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.rotate,
+            validated_data=serializer.validated_data,
+            operation_label="document rotate",
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_merge",
+        description="Merge selected documents into a new document",
+        responses={
+            200: inline_serializer(
+                name="MergeDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class MergeDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = MergeDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.merge,
+            validated_data=serializer.validated_data,
+            operation_label="document merge",
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_delete",
+        description="Move selected documents to trash",
+        responses={
+            200: inline_serializer(
+                name="DeleteDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class DeleteDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = DeleteDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.delete,
+            validated_data=serializer.validated_data,
+            operation_label="document delete",
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_reprocess",
+        description="Reprocess selected documents",
+        responses={
+            200: inline_serializer(
+                name="ReprocessDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class ReprocessDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = ReprocessDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.reprocess,
+            validated_data=serializer.validated_data,
+            operation_label="document reprocess",
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_edit_pdf",
+        description="Perform PDF edit operations on a selected document",
+        responses={
+            200: inline_serializer(
+                name="EditPdfDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class EditPdfDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = EditPdfDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.edit_pdf,
+            validated_data=serializer.validated_data,
+            operation_label="PDF edit",
+        )
+
+
+@extend_schema_view(
+    post=extend_schema(
+        operation_id="documents_remove_password",
+        description="Remove password protection from selected PDFs",
+        responses={
+            200: inline_serializer(
+                name="RemovePasswordDocumentsResult",
+                fields={
+                    "result": serializers.CharField(),
+                },
+            ),
+        },
+    ),
+)
+class RemovePasswordDocumentsView(DocumentOperationPermissionMixin):
+    serializer_class = RemovePasswordDocumentsSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return self._execute_document_action(
+            method=bulk_edit.remove_password,
+            validated_data=serializer.validated_data,
+            operation_label="password removal",
+        )
 
 
 @extend_schema_view(
@@ -2706,13 +3099,21 @@ class GlobalSearchView(PassUserMixin):
         )
         groups = groups[:OBJECT_LIMIT]
         mail_rules = (
-            MailRule.objects.filter(name__icontains=query)
+            get_objects_for_user_owner_aware(
+                request.user,
+                "view_mailrule",
+                MailRule,
+            ).filter(name__icontains=query)
             if request.user.has_perm("paperless_mail.view_mailrule")
             else []
         )
         mail_rules = mail_rules[:OBJECT_LIMIT]
         mail_accounts = (
-            MailAccount.objects.filter(name__icontains=query)
+            get_objects_for_user_owner_aware(
+                request.user,
+                "view_mailaccount",
+                MailAccount,
+            ).filter(name__icontains=query)
             if request.user.has_perm("paperless_mail.view_mailaccount")
             else []
         )
@@ -2914,7 +3315,7 @@ class StatisticsView(GenericAPIView):
         )
 
 
-class BulkDownloadView(GenericAPIView):
+class BulkDownloadView(DocumentSelectionMixin, GenericAPIView):
     permission_classes = (IsAuthenticated,)
     serializer_class = BulkDownloadSerializer
     parser_classes = (parsers.JSONParser,)
@@ -2923,7 +3324,10 @@ class BulkDownloadView(GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        ids = serializer.validated_data.get("documents")
+        ids = self._resolve_document_ids(
+            user=request.user,
+            validated_data=serializer.validated_data,
+        )
         documents = Document.objects.filter(pk__in=ids)
         compression = serializer.validated_data.get("compression")
         content = serializer.validated_data.get("content")
@@ -3019,6 +3423,12 @@ class StoragePathViewSet(PermissionsAwareDocumentCountMixin, ModelViewSet):
         path = serializer.validated_data.get("path")
 
         result = format_filename(document, path)
+        if result:
+            extension = (
+                Path(str(document.filename)).suffix if document.filename else ""
+            ) or document.file_type
+            result_path = Path(result)
+            result = str(result_path.with_name(f"{result_path.name}{extension}"))
         return Response(result)
 
 
@@ -3553,20 +3963,55 @@ class BulkEditObjectsView(PassUserMixin):
         user = self.request.user
         object_type = serializer.validated_data.get("object_type")
         object_ids = serializer.validated_data.get("objects")
+        apply_to_all = serializer.validated_data.get("all")
         object_class = serializer.get_object_class(object_type)
         operation = serializer.validated_data.get("operation")
+        model_name = object_class._meta.model_name
+        perm_codename = (
+            f"change_{model_name}"
+            if operation == "set_permissions"
+            else f"delete_{model_name}"
+        )
 
-        objs = object_class.objects.select_related("owner").filter(pk__in=object_ids)
+        if apply_to_all:
+            # Support all to avoid sending large lists of ids for bulk operations, with optional filters
+            filters = serializer.validated_data.get("filters") or {}
+            filterset_class = {
+                "tags": TagFilterSet,
+                "correspondents": CorrespondentFilterSet,
+                "document_types": DocumentTypeFilterSet,
+                "storage_paths": StoragePathFilterSet,
+            }[object_type]
+            user_permitted_objects = get_objects_for_user_owner_aware(
+                user,
+                perm_codename,
+                object_class,
+            )
+            objs = filterset_class(
+                data=filters,
+                queryset=user_permitted_objects,
+            ).qs
+            if object_type == "tags":
+                editable_ids = set(user_permitted_objects.values_list("pk", flat=True))
+                all_ids = set(objs.values_list("pk", flat=True))
+                for tag in objs:
+                    all_ids.update(
+                        descendant.pk
+                        for descendant in tag.get_descendants()
+                        if descendant.pk in editable_ids
+                    )
+                objs = object_class.objects.filter(pk__in=all_ids)
+            objs = objs.select_related("owner")
+            object_ids = list(objs.values_list("pk", flat=True))
+        else:
+            objs = object_class.objects.select_related("owner").filter(
+                pk__in=object_ids,
+            )
 
         if not user.is_superuser:
-            model_name = object_class._meta.model_name
-            perm = (
-                f"documents.change_{model_name}"
-                if operation == "set_permissions"
-                else f"documents.delete_{model_name}"
-            )
+            perm = f"documents.{perm_codename}"
             has_perms = user.has_perm(perm) and all(
-                (obj.owner == user or obj.owner is None) for obj in objs
+                has_perms_owner_aware(user, perm_codename, obj) for obj in objs
             )
 
             if not has_perms:
@@ -3686,7 +4131,7 @@ class CustomFieldViewSet(PermissionsAwareDocumentCountMixin, ModelViewSet):
     document_count_through = CustomFieldInstance
     document_count_source_field = "field_id"
 
-    queryset = CustomField.objects.all().order_by("-created")
+    queryset = CustomField.objects.all().order_by("name")
 
 
 @extend_schema_view(

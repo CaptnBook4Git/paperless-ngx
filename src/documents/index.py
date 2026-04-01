@@ -375,6 +375,26 @@ class DelayedQuery:
             ]
         return self._manual_hits_cache
 
+    def get_result_ids(self) -> list[int]:
+        """
+        Return all matching document IDs for the current query and ordering.
+        """
+        if self._manual_sort_requested():
+            return [hit["id"] for hit in self._manual_hits()]
+
+        q, mask, suggested_correction = self._get_query()
+        self.suggested_correction = suggested_correction
+        sortedby, reverse = self._get_query_sortedby()
+        results = self.searcher.search(
+            q,
+            mask=mask,
+            filter=MappedDocIdSet(self.filter_queryset, self.searcher.ixreader),
+            limit=None,
+            sortedby=sortedby,
+            reverse=reverse,
+        )
+        return [hit["id"] for hit in results]
+
     def __getitem__(self, item):
         if item.start in self.saved_results:
             return self.saved_results[item.start]
@@ -477,7 +497,14 @@ class DelayedFullTextQuery(DelayedQuery):
         try:
             corrected = self.searcher.correct_query(q, q_str)
             if corrected.string != q_str:
-                suggested_correction = corrected.string
+                corrected_results = self.searcher.search(
+                    corrected.query,
+                    limit=1,
+                    filter=MappedDocIdSet(self.filter_queryset, self.searcher.ixreader),
+                    scored=False,
+                )
+                if len(corrected_results) > 0:
+                    suggested_correction = corrected.string
         except Exception as e:
             logger.info(
                 "Error while correcting query %s: %s",

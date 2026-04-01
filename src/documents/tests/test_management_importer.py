@@ -41,6 +41,7 @@ class TestCommandImport(
                 "document_importer",
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
+                skip_checks=True,
             )
         self.assertIn(
             "That directory doesn't appear to contain a manifest.json file.",
@@ -67,6 +68,7 @@ class TestCommandImport(
                 "document_importer",
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
+                skip_checks=True,
             )
         self.assertIn(
             "The manifest file contains a record which does not refer to an actual document file.",
@@ -96,6 +98,7 @@ class TestCommandImport(
                 "document_importer",
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
+                skip_checks=True,
             )
         self.assertIn('The manifest file refers to "noexist.pdf"', str(e.exception))
 
@@ -119,15 +122,22 @@ class TestCommandImport(
             # No read permissions
             original_path.chmod(0o222)
 
+            manifest_path = Path(temp_dir) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "model": "documents.document",
+                            EXPORTER_FILE_NAME: "original.pdf",
+                            EXPORTER_ARCHIVE_NAME: "archive.pdf",
+                        },
+                    ],
+                ),
+            )
+
             cmd = Command()
             cmd.source = Path(temp_dir)
-            cmd.manifest = [
-                {
-                    "model": "documents.document",
-                    EXPORTER_FILE_NAME: "original.pdf",
-                    EXPORTER_ARCHIVE_NAME: "archive.pdf",
-                },
-            ]
+            cmd.manifest_paths = [manifest_path]
             cmd.data_only = False
             with self.assertRaises(CommandError) as cm:
                 cmd.check_manifest_validity()
@@ -150,7 +160,7 @@ class TestCommandImport(
             - CommandError is raised indicating the issue
         """
         with self.assertRaises(CommandError) as cm:
-            call_command("document_importer", Path("/tmp/notapath"))
+            call_command("document_importer", Path("/tmp/notapath"), skip_checks=True)
         self.assertIn("That path doesn't exist", str(cm.exception))
 
     def test_import_source_not_readable(self) -> None:
@@ -166,7 +176,7 @@ class TestCommandImport(
             path = Path(temp_dir)
             path.chmod(0o222)
             with self.assertRaises(CommandError) as cm:
-                call_command("document_importer", path)
+                call_command("document_importer", path, skip_checks=True)
             self.assertIn(
                 "That path doesn't appear to be readable",
                 str(cm.exception),
@@ -186,7 +196,12 @@ class TestCommandImport(
         self.assertIsNotFile(path)
 
         with self.assertRaises(CommandError) as e:
-            call_command("document_importer", "--no-progress-bar", str(path))
+            call_command(
+                "document_importer",
+                "--no-progress-bar",
+                str(path),
+                skip_checks=True,
+            )
         self.assertIn("That path doesn't exist", str(e.exception))
 
     def test_import_files_exist(self) -> None:
@@ -211,6 +226,7 @@ class TestCommandImport(
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         self.assertIn(
@@ -239,6 +255,7 @@ class TestCommandImport(
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         self.assertIn(
@@ -260,8 +277,8 @@ class TestCommandImport(
 
         Document.objects.create(
             content="Content",
-            checksum="42995833e01aea9b3edee44bbfdd7ce1",
-            archive_checksum="62acb0bcbfbcaa62ca6ad3668e4e404b",
+            checksum="1093cf6e32adbd16b06969df09215d42c4a3a8938cc18b39455953f08d1ff2ab",
+            archive_checksum="706124ecde3c31616992fa979caed17a726b1c9ccdba70e82a4ff796cea97ccf",
             title="wow1",
             filename="0000001.pdf",
             mime_type="application/pdf",
@@ -275,6 +292,7 @@ class TestCommandImport(
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         self.assertIn(
@@ -296,12 +314,13 @@ class TestCommandImport(
         (self.dirs.scratch_dir / "manifest.json").touch()
 
         # We're not building a manifest, so it fails, but this test doesn't care
-        with self.assertRaises(json.decoder.JSONDecodeError):
+        with self.assertRaises(CommandError):
             call_command(
                 "document_importer",
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         stdout_str = str(stdout.read())
@@ -325,12 +344,13 @@ class TestCommandImport(
         )
 
         # We're not building a manifest, so it fails, but this test doesn't care
-        with self.assertRaises(json.decoder.JSONDecodeError):
+        with self.assertRaises(CommandError):
             call_command(
                 "document_importer",
                 "--no-progress-bar",
                 str(self.dirs.scratch_dir),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         stdout_str = str(stdout.read())
@@ -370,6 +390,7 @@ class TestCommandImport(
                 "--no-progress-bar",
                 str(zip_path),
                 stdout=stdout,
+                skip_checks=True,
             )
         stdout.seek(0)
         stdout_str = str(stdout.read())

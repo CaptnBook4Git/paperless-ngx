@@ -41,6 +41,7 @@ from documents.models import SavedView
 from documents.models import ShareLink
 from documents.models import StoragePath
 from documents.models import Tag
+from documents.models import UiSettings
 from documents.models import Workflow
 from documents.models import WorkflowAction
 from documents.models import WorkflowTrigger
@@ -176,7 +177,7 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         results = response.data["results"]
         self.assertEqual(len(results[0]), 0)
 
-    def test_document_fields_api_version_8_respects_created(self) -> None:
+    def test_document_fields_respects_created(self) -> None:
         Document.objects.create(
             title="legacy",
             checksum="123",
@@ -186,7 +187,6 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
 
         response = self.client.get(
             "/api/documents/?fields=id",
-            headers={"Accept": "application/json; version=8"},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -196,25 +196,22 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
 
         response = self.client.get(
             "/api/documents/?fields=id,created",
-            headers={"Accept": "application/json; version=8"},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         results = response.data["results"]
         self.assertIn("id", results[0])
         self.assertIn("created", results[0])
-        self.assertRegex(results[0]["created"], r"^2024-01-15T00:00:00.*$")
+        self.assertEqual(results[0]["created"], "2024-01-15")
 
-    def test_document_legacy_created_format(self) -> None:
+    def test_document_created_format(self) -> None:
         """
         GIVEN:
             - Existing document
         WHEN:
-            - Document is requested with api version ≥ 9
-            - Document is requested with api version < 9
+            - Document is requested
         THEN:
             - Document created field is returned as date
-            - Document created field is returned as datetime
         """
         doc = Document.objects.create(
             title="none",
@@ -225,14 +222,6 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
 
         response = self.client.get(
             f"/api/documents/{doc.pk}/",
-            headers={"Accept": "application/json; version=8"},
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertRegex(response.data["created"], r"^2023-01-01T00:00:00.*$")
-
-        response = self.client.get(
-            f"/api/documents/{doc.pk}/",
-            headers={"Accept": "application/json; version=9"},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["created"], "2023-01-01")
@@ -1130,21 +1119,19 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
             [u1_doc1.id],
         )
 
-    def test_pagination_all(self) -> None:
+    def test_pagination_results(self) -> None:
         """
         GIVEN:
             - A set of 50 documents
         WHEN:
             - API request for document filtering
         THEN:
-            - Results are paginated (25 items) and response["all"] returns all ids (50 items)
+            - Results are paginated (25 items) and count reflects all results (50 items)
         """
         t = Tag.objects.create(name="tag")
-        docs = []
         for i in range(50):
             d = Document.objects.create(checksum=i, content=f"test{i}")
             d.tags.add(t)
-            docs.append(d)
 
         response = self.client.get(
             f"/api/documents/?tags__id__in={t.id}",
@@ -1152,8 +1139,83 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         results = response.data["results"]
         self.assertEqual(len(results), 25)
-        self.assertEqual(len(response.data["all"]), 50)
+        self.assertEqual(response.data["count"], 50)
+        self.assertNotIn("all", response.data)
+
+    def test_pagination_all_for_api_version_9(self) -> None:
+        """
+        GIVEN:
+            - A set of documents matching a filter
+        WHEN:
+            - API request uses legacy version 9
+        THEN:
+            - Response includes "all" for backward compatibility
+        """
+        t = Tag.objects.create(name="tag")
+        docs = []
+        for i in range(4):
+            d = Document.objects.create(checksum=i, content=f"test{i}")
+            d.tags.add(t)
+            docs.append(d)
+
+        response = self.client.get(
+            f"/api/documents/?tags__id__in={t.id}",
+            headers={"Accept": "application/json; version=9"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("all", response.data)
         self.assertCountEqual(response.data["all"], [d.id for d in docs])
+
+    def test_list_with_include_selection_data(self) -> None:
+        correspondent = Correspondent.objects.create(name="c1")
+        doc_type = DocumentType.objects.create(name="dt1")
+        storage_path = StoragePath.objects.create(name="sp1")
+        tag = Tag.objects.create(name="tag")
+
+        matching_doc = Document.objects.create(
+            checksum="A",
+            correspondent=correspondent,
+            document_type=doc_type,
+            storage_path=storage_path,
+        )
+        matching_doc.tags.add(tag)
+
+        non_matching_doc = Document.objects.create(checksum="B")
+        non_matching_doc.tags.add(Tag.objects.create(name="other"))
+
+        response = self.client.get(
+            f"/api/documents/?tags__id__in={tag.id}&include_selection_data=true",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("selection_data", response.data)
+
+        selected_correspondent = next(
+            item
+            for item in response.data["selection_data"]["selected_correspondents"]
+            if item["id"] == correspondent.id
+        )
+        selected_tag = next(
+            item
+            for item in response.data["selection_data"]["selected_tags"]
+            if item["id"] == tag.id
+        )
+        selected_type = next(
+            item
+            for item in response.data["selection_data"]["selected_document_types"]
+            if item["id"] == doc_type.id
+        )
+        selected_storage_path = next(
+            item
+            for item in response.data["selection_data"]["selected_storage_paths"]
+            if item["id"] == storage_path.id
+        )
+
+        self.assertEqual(selected_correspondent["document_count"], 1)
+        self.assertEqual(selected_tag["document_count"], 1)
+        self.assertEqual(selected_type["document_count"], 1)
+        self.assertEqual(selected_storage_path["document_count"], 1)
 
     def test_statistics(self) -> None:
         doc1 = Document.objects.create(
@@ -2200,6 +2262,205 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["count"], 0)
 
+    def test_saved_view_api_version_backward_compatibility(self) -> None:
+        """
+        GIVEN:
+            - Saved views and UiSettings with visibility preferences
+        WHEN:
+            - API request with version=9 (legacy)
+            - API request with version=10 (current)
+        THEN:
+            - Version 9 returns show_on_dashboard and show_in_sidebar from UiSettings
+            - Version 10 omits these fields (moved to UiSettings)
+        """
+        v1 = SavedView.objects.create(
+            owner=self.user,
+            name="dashboard_view",
+            sort_field="created",
+        )
+        v2 = SavedView.objects.create(
+            owner=self.user,
+            name="sidebar_view",
+            sort_field="created",
+        )
+        v3 = SavedView.objects.create(
+            owner=self.user,
+            name="hidden_view",
+            sort_field="created",
+        )
+
+        UiSettings.objects.update_or_create(
+            user=self.user,
+            defaults={
+                "settings": {
+                    "saved_views": {
+                        "dashboard_views_visible_ids": [v1.id],
+                        "sidebar_views_visible_ids": [v2.id],
+                    },
+                },
+            },
+        )
+
+        response_v9 = self.client.get(
+            "/api/saved_views/",
+            headers={"Accept": "application/json; version=9"},
+            format="json",
+        )
+        self.assertEqual(response_v9.status_code, status.HTTP_200_OK)
+        results_v9 = {r["id"]: r for r in response_v9.data["results"]}
+        self.assertIn("show_on_dashboard", results_v9[v1.id])
+        self.assertIn("show_in_sidebar", results_v9[v1.id])
+        self.assertTrue(results_v9[v1.id]["show_on_dashboard"])
+        self.assertFalse(results_v9[v1.id]["show_in_sidebar"])
+        self.assertTrue(results_v9[v2.id]["show_in_sidebar"])
+        self.assertFalse(results_v9[v2.id]["show_on_dashboard"])
+        self.assertFalse(results_v9[v3.id]["show_on_dashboard"])
+        self.assertFalse(results_v9[v3.id]["show_in_sidebar"])
+
+        response_v10 = self.client.get(
+            "/api/saved_views/",
+            headers={"Accept": "application/json; version=10"},
+            format="json",
+        )
+        self.assertEqual(response_v10.status_code, status.HTTP_200_OK)
+        results_v10 = {r["id"]: r for r in response_v10.data["results"]}
+        self.assertNotIn("show_on_dashboard", results_v10[v1.id])
+        self.assertNotIn("show_in_sidebar", results_v10[v1.id])
+
+    def test_saved_view_api_version_9_user_without_ui_settings(self) -> None:
+        """
+        GIVEN:
+            - User with no UiSettings and a saved view
+        WHEN:
+            - API request with version=9
+        THEN:
+            - show_on_dashboard and show_in_sidebar are False (default)
+        """
+        SavedView.objects.create(
+            owner=self.user,
+            name="test_view",
+            sort_field="created",
+        )
+        UiSettings.objects.filter(user=self.user).delete()
+
+        response = self.client.get(
+            "/api/saved_views/",
+            headers={"Accept": "application/json; version=9"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.data["results"][0]
+        self.assertFalse(result["show_on_dashboard"])
+        self.assertFalse(result["show_in_sidebar"])
+
+    def test_saved_view_api_version_9_create_writes_visibility_to_ui_settings(
+        self,
+    ) -> None:
+        """
+        GIVEN:
+            - No UiSettings for the current user
+        WHEN:
+            - A saved view is created through API version 9 with visibility flags
+        THEN:
+            - Visibility is persisted in UiSettings.saved_views
+        """
+        UiSettings.objects.filter(user=self.user).delete()
+
+        response = self.client.post(
+            "/api/saved_views/",
+            {
+                "name": "legacy-v9-create",
+                "sort_field": "created",
+                "filter_rules": [],
+                "show_on_dashboard": True,
+                "show_in_sidebar": False,
+            },
+            headers={"Accept": "application/json; version=9"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["show_on_dashboard"])
+        self.assertFalse(response.data["show_in_sidebar"])
+
+        self.user.refresh_from_db()
+        self.assertTrue(hasattr(self.user, "ui_settings"))
+        saved_view_settings = self.user.ui_settings.settings["saved_views"]
+        self.assertListEqual(
+            saved_view_settings["dashboard_views_visible_ids"],
+            [response.data["id"]],
+        )
+        self.assertListEqual(saved_view_settings["sidebar_views_visible_ids"], [])
+
+    def test_saved_view_api_version_9_patch_writes_visibility_to_ui_settings(
+        self,
+    ) -> None:
+        """
+        GIVEN:
+            - Existing saved views and UiSettings visibility ids
+        WHEN:
+            - A saved view is updated through API version 9 visibility flags
+        THEN:
+            - The per-user UiSettings visibility ids are updated
+        """
+        v1 = SavedView.objects.create(
+            owner=self.user,
+            name="legacy-v9-patch-1",
+            sort_field="created",
+        )
+        v2 = SavedView.objects.create(
+            owner=self.user,
+            name="legacy-v9-patch-2",
+            sort_field="created",
+        )
+        UiSettings.objects.update_or_create(
+            user=self.user,
+            defaults={
+                "settings": {
+                    "saved_views": {
+                        "dashboard_views_visible_ids": [v1.id],
+                        "sidebar_views_visible_ids": [v1.id, v2.id],
+                    },
+                },
+            },
+        )
+
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "show_on_dashboard": False,
+            },
+            headers={"Accept": "application/json; version=9"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["show_on_dashboard"])
+        self.assertTrue(response.data["show_in_sidebar"])
+
+        self.user.refresh_from_db()
+        saved_view_settings = self.user.ui_settings.settings["saved_views"]
+        self.assertListEqual(saved_view_settings["dashboard_views_visible_ids"], [])
+        self.assertListEqual(
+            saved_view_settings["sidebar_views_visible_ids"],
+            [v1.id, v2.id],
+        )
+
+        response = self.client.patch(
+            f"/api/saved_views/{v1.id}/",
+            {
+                "show_in_sidebar": False,
+            },
+            headers={"Accept": "application/json; version=9"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["show_on_dashboard"])
+        self.assertFalse(response.data["show_in_sidebar"])
+
+        self.user.refresh_from_db()
+        saved_view_settings = self.user.ui_settings.settings["saved_views"]
+        self.assertListEqual(saved_view_settings["dashboard_views_visible_ids"], [])
+        self.assertListEqual(saved_view_settings["sidebar_views_visible_ids"], [v2.id])
+
     def test_saved_view_create_update_patch(self) -> None:
         User.objects.create_user("user1")
 
@@ -2601,26 +2862,6 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
                     "last_name": note.user.last_name,
                 },
             },
-        )
-
-    def test_docnote_serializer_v7(self) -> None:
-        doc = Document.objects.create(
-            title="test",
-            mime_type="application/pdf",
-            content="this is a document which will have notes!",
-        )
-        Note.objects.create(
-            note="This is a note.",
-            document=doc,
-            user=self.user,
-        )
-        self.assertEqual(
-            self.client.get(
-                f"/api/documents/{doc.pk}/",
-                headers={"Accept": "application/json; version=7"},
-                format="json",
-            ).data["notes"][0]["user"],
-            self.user.id,
         )
 
     def test_create_note(self) -> None:
@@ -3391,14 +3632,13 @@ class TestDocumentApi(DirectoriesMixin, DocumentConsumeDelayMixin, APITestCase):
             )
 
 
-class TestDocumentApiV2(DirectoriesMixin, APITestCase):
+class TestDocumentApiTagColors(DirectoriesMixin, APITestCase):
     def setUp(self) -> None:
         super().setUp()
 
         self.user = User.objects.create_superuser(username="temp_admin")
 
         self.client.force_authenticate(user=self.user)
-        self.client.defaults["HTTP_ACCEPT"] = "application/json; version=2"
 
     def test_tag_validate_color(self) -> None:
         self.assertEqual(

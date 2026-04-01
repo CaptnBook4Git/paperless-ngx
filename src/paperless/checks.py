@@ -3,10 +3,12 @@ import os
 import pwd
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 from django.conf import settings
 from django.core.checks import Error
+from django.core.checks import Tags
 from django.core.checks import Warning
 from django.core.checks import register
 from django.db import connections
@@ -204,15 +206,16 @@ def audit_log_check(app_configs, **kwargs):
     return result
 
 
-@register()
+@register(Tags.compatibility)
 def check_v3_minimum_upgrade_version(
     app_configs: object,
     **kwargs: object,
 ) -> list[Error]:
-    """Enforce that upgrades to v3 must start from v2.20.9.
+    """
+    Enforce that upgrades to v3 must start from v2.20.10.
 
     v3 squashes all prior migrations into 0001_squashed and 0002_squashed.
-    If a user skips v2.20.9, the data migration in 1075_workflowaction_order
+    If a user skips v2.20.10, the data migration in 1075_workflowaction_order
     never runs and the squash may apply schema changes against an incomplete
     database state.
     """
@@ -239,7 +242,7 @@ def check_v3_minimum_upgrade_version(
         if {"0001_squashed", "0002_squashed"} & applied:
             return []
 
-        # On v2.20.9 exactly — squash will pick up cleanly from here
+        # On v2.20.10 exactly — squash will pick up cleanly from here
         if "1075_workflowaction_order" in applied:
             return []
 
@@ -250,8 +253,8 @@ def check_v3_minimum_upgrade_version(
         Error(
             "Cannot upgrade to Paperless-ngx v3 from this version.",
             hint=(
-                "Upgrading to v3 can only be performed from v2.20.9."
-                "Please upgrade to v2.20.9, run migrations, then upgrade to v3."
+                "Upgrading to v3 can only be performed from v2.20.10."
+                "Please upgrade to v2.20.10, run migrations, then upgrade to v3."
                 "See https://docs.paperless-ngx.com/setup/#upgrading for details."
             ),
             id="paperless.E002",
@@ -297,3 +300,62 @@ def check_deprecated_db_settings(
         )
 
     return warnings
+
+
+@register()
+def check_remote_parser_configured(app_configs, **kwargs) -> list[Error]:
+    if settings.REMOTE_OCR_ENGINE == "azureai" and not (
+        settings.REMOTE_OCR_ENDPOINT and settings.REMOTE_OCR_API_KEY
+    ):
+        return [
+            Error(
+                "Azure AI remote parser requires endpoint and API key to be configured.",
+            ),
+        ]
+
+    return []
+
+
+def get_tesseract_langs():
+    proc = subprocess.run(
+        [shutil.which("tesseract"), "--list-langs"],
+        capture_output=True,
+    )
+
+    # Decode bytes to string, split on newlines, trim out the header
+    proc_lines = proc.stdout.decode("utf8", errors="ignore").strip().split("\n")[1:]
+
+    return [x.strip() for x in proc_lines]
+
+
+@register()
+def check_default_language_available(app_configs, **kwargs):
+    errs = []
+
+    if not settings.OCR_LANGUAGE:
+        errs.append(
+            Warning(
+                "No OCR language has been specified with PAPERLESS_OCR_LANGUAGE. "
+                "This means that tesseract will fallback to english.",
+            ),
+        )
+        return errs
+
+    # binaries_check in paperless will check and report if this doesn't exist
+    # So skip trying to do anything here and let that handle missing binaries
+    if shutil.which("tesseract") is not None:
+        installed_langs = get_tesseract_langs()
+
+        specified_langs = [x.strip() for x in settings.OCR_LANGUAGE.split("+")]
+
+        for lang in specified_langs:
+            if lang not in installed_langs:
+                errs.append(
+                    Error(
+                        f"The selected ocr language {lang} is "
+                        f"not installed. Paperless cannot OCR your documents "
+                        f"without it. Please fix PAPERLESS_OCR_LANGUAGE.",
+                    ),
+                )
+
+    return errs

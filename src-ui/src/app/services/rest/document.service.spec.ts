@@ -198,7 +198,7 @@ describe(`DocumentService`, () => {
     const content = 'both'
     const useFilenameFormatting = false
     subscription = service
-      .bulkDownload(ids, content, useFilenameFormatting)
+      .bulkDownload({ documents: ids }, content, useFilenameFormatting)
       .subscribe()
     const req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}${endpoint}/bulk_download/`
@@ -218,7 +218,9 @@ describe(`DocumentService`, () => {
       add_tags: [15],
       remove_tags: [6],
     }
-    subscription = service.bulkEdit(ids, method, parameters).subscribe()
+    subscription = service
+      .bulkEdit({ documents: ids }, method, parameters)
+      .subscribe()
     const req = httpTestingController.expectOne(
       `${environment.apiBaseUrl}${endpoint}/bulk_edit/`
     )
@@ -227,6 +229,111 @@ describe(`DocumentService`, () => {
       documents: ids,
       method,
       parameters,
+    })
+  })
+
+  it('should call appropriate api endpoint for bulk edit with all and filters', () => {
+    const method = 'modify_tags'
+    const parameters = {
+      add_tags: [15],
+      remove_tags: [6],
+    }
+    const selection = {
+      all: true,
+      filters: { title__icontains: 'apple' },
+    }
+    subscription = service.bulkEdit(selection, method, parameters).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/bulk_edit/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      all: true,
+      filters: { title__icontains: 'apple' },
+      method,
+      parameters,
+    })
+  })
+
+  it('should call appropriate api endpoint for delete documents', () => {
+    const ids = [1, 2, 3]
+    subscription = service.deleteDocuments({ documents: ids }).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/delete/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+    })
+  })
+
+  it('should call appropriate api endpoint for reprocess documents', () => {
+    const ids = [1, 2, 3]
+    subscription = service.reprocessDocuments({ documents: ids }).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/reprocess/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+    })
+  })
+
+  it('should call appropriate api endpoint for rotate documents', () => {
+    const ids = [1, 2, 3]
+    subscription = service.rotateDocuments({ documents: ids }, 90).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/rotate/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+      degrees: 90,
+      source_mode: 'latest_version',
+    })
+  })
+
+  it('should call appropriate api endpoint for merge documents', () => {
+    const ids = [1, 2, 3]
+    const args = { metadata_document_id: 1, delete_originals: true }
+    subscription = service.mergeDocuments(ids, args).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/merge/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+      metadata_document_id: 1,
+      delete_originals: true,
+    })
+  })
+
+  it('should call appropriate api endpoint for edit pdf', () => {
+    const ids = [1]
+    const args = { operations: [{ page: 1, rotate: 90, doc: 0 }] }
+    subscription = service.editPdfDocuments(ids, args).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/edit_pdf/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+      operations: [{ page: 1, rotate: 90, doc: 0 }],
+    })
+  })
+
+  it('should call appropriate api endpoint for remove password', () => {
+    const ids = [1]
+    const args = { password: 'secret', update_document: true }
+    subscription = service.removePasswordDocuments(ids, args).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/remove_password/`
+    )
+    expect(req.request.method).toEqual('POST')
+    expect(req.request.body).toEqual({
+      documents: ids,
+      password: 'secret',
+      update_document: true,
     })
   })
 

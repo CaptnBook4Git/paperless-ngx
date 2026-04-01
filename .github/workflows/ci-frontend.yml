@@ -3,39 +3,78 @@ on:
   push:
     branches-ignore:
       - 'translations**'
-    paths:
-      - 'src-ui/**'
-      - '.github/workflows/ci-frontend.yml'
   pull_request:
     branches-ignore:
       - 'translations**'
-    paths:
-      - 'src-ui/**'
-      - '.github/workflows/ci-frontend.yml'
   workflow_dispatch:
 concurrency:
   group: frontend-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    name: Detect Frontend Changes
+    runs-on: ubuntu-slim
+    outputs:
+      frontend_changed: ${{ steps.force.outputs.run_all == 'true' || steps.filter.outputs.frontend == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Decide run mode
+        id: force
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run_all=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "push" && ( "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "dev" ) ]]; then
+            echo "run_all=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_all=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set diff range
+        id: range
+        if: steps.force.outputs.run_all != 'true'
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "base=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.created }}" == "true" ]]; then
+            echo "base=${{ github.event.repository.default_branch }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Detect changes
+        id: filter
+        if: steps.force.outputs.run_all != 'true'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          base: ${{ steps.range.outputs.base }}
+          ref: ${{ steps.range.outputs.ref }}
+          filters: |
+            frontend:
+              - 'src-ui/**'
+              - '.github/workflows/ci-frontend.yml'
   install-dependencies:
+    needs: changes
+    if: needs.changes.outputs.frontend_changed == 'true'
     name: Install Dependencies
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.2.0
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
         with:
           version: 10
       - name: Use Node.js 24
-        uses: actions/setup-node@v6.2.0
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24.x
           cache: 'pnpm'
           cache-dependency-path: 'src-ui/pnpm-lock.yaml'
       - name: Cache frontend dependencies
         id: cache-frontend-deps
-        uses: actions/cache@v5.0.3
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             ~/.pnpm-store
@@ -45,23 +84,24 @@ jobs:
         run: cd src-ui && pnpm install
   lint:
     name: Lint
-    needs: install-dependencies
+    needs: [changes, install-dependencies]
+    if: needs.changes.outputs.frontend_changed == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.2.0
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
         with:
           version: 10
       - name: Use Node.js 24
-        uses: actions/setup-node@v6.2.0
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24.x
           cache: 'pnpm'
           cache-dependency-path: 'src-ui/pnpm-lock.yaml'
       - name: Cache frontend dependencies
-        uses: actions/cache@v5.0.3
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             ~/.pnpm-store
@@ -73,7 +113,8 @@ jobs:
         run: cd src-ui && pnpm run lint
   unit-tests:
     name: "Unit Tests (${{ matrix.shard-index }}/${{ matrix.shard-count }})"
-    needs: install-dependencies
+    needs: [changes, install-dependencies]
+    if: needs.changes.outputs.frontend_changed == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -83,19 +124,19 @@ jobs:
         shard-count: [4]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.2.0
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
         with:
           version: 10
       - name: Use Node.js 24
-        uses: actions/setup-node@v6.2.0
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24.x
           cache: 'pnpm'
           cache-dependency-path: 'src-ui/pnpm-lock.yaml'
       - name: Cache frontend dependencies
-        uses: actions/cache@v5.0.3
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             ~/.pnpm-store
@@ -107,19 +148,20 @@ jobs:
         run: cd src-ui && pnpm run test --max-workers=2 --shard=${{ matrix.shard-index }}/${{ matrix.shard-count }}
       - name: Upload test results to Codecov
         if: always()
-        uses: codecov/codecov-action@v5.5.2
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
         with:
           flags: frontend-node-${{ matrix.node-version }}
           directory: src-ui/
           report_type: test_results
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5.5.2
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
         with:
           flags: frontend-node-${{ matrix.node-version }}
           directory: src-ui/coverage/
   e2e-tests:
     name: "E2E Tests (${{ matrix.shard-index }}/${{ matrix.shard-count }})"
-    needs: install-dependencies
+    needs: [changes, install-dependencies]
+    if: needs.changes.outputs.frontend_changed == 'true'
     runs-on: ubuntu-24.04
     container: mcr.microsoft.com/playwright:v1.58.2-noble
     env:
@@ -133,19 +175,19 @@ jobs:
         shard-count: [2]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.2.0
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
         with:
           version: 10
       - name: Use Node.js 24
-        uses: actions/setup-node@v6.2.0
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24.x
           cache: 'pnpm'
           cache-dependency-path: 'src-ui/pnpm-lock.yaml'
       - name: Cache frontend dependencies
-        uses: actions/cache@v5.0.3
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             ~/.pnpm-store
@@ -159,25 +201,26 @@ jobs:
         run: cd src-ui && pnpm exec playwright test --shard ${{ matrix.shard-index }}/${{ matrix.shard-count }}
   bundle-analysis:
     name: Bundle Analysis
-    needs: [unit-tests, e2e-tests]
+    needs: [changes, unit-tests, e2e-tests]
+    if: needs.changes.outputs.frontend_changed == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 2
       - name: Install pnpm
-        uses: pnpm/action-setup@v4.2.0
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
         with:
           version: 10
       - name: Use Node.js 24
-        uses: actions/setup-node@v6.2.0
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 24.x
           cache: 'pnpm'
           cache-dependency-path: 'src-ui/pnpm-lock.yaml'
       - name: Cache frontend dependencies
-        uses: actions/cache@v5.0.3
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: |
             ~/.pnpm-store
@@ -189,3 +232,42 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         run: cd src-ui && pnpm run build --configuration=production
+  gate:
+    name: Frontend CI Gate
+    needs: [changes, install-dependencies, lint, unit-tests, e2e-tests, bundle-analysis]
+    if: always()
+    runs-on: ubuntu-slim
+    steps:
+      - name: Check gate
+        run: |
+          if [[ "${{ needs.changes.outputs.frontend_changed }}" != "true" ]]; then
+            echo "No frontend-relevant changes detected."
+            exit 0
+          fi
+
+          if [[ "${{ needs['install-dependencies'].result }}" != "success" ]]; then
+            echo "::error::Frontend install job result: ${{ needs['install-dependencies'].result }}"
+            exit 1
+          fi
+
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "::error::Frontend lint job result: ${{ needs.lint.result }}"
+            exit 1
+          fi
+
+          if [[ "${{ needs['unit-tests'].result }}" != "success" ]]; then
+            echo "::error::Frontend unit-tests job result: ${{ needs['unit-tests'].result }}"
+            exit 1
+          fi
+
+          if [[ "${{ needs['e2e-tests'].result }}" != "success" ]]; then
+            echo "::error::Frontend e2e-tests job result: ${{ needs['e2e-tests'].result }}"
+            exit 1
+          fi
+
+          if [[ "${{ needs['bundle-analysis'].result }}" != "success" ]]; then
+            echo "::error::Frontend bundle-analysis job result: ${{ needs['bundle-analysis'].result }}"
+            exit 1
+          fi
+
+          echo "Frontend checks passed."

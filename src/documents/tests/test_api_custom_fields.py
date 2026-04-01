@@ -6,6 +6,7 @@ from unittest.mock import ANY
 from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
 from django.test import override_settings
+from guardian.shortcuts import assign_perm
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -322,113 +323,6 @@ class TestCustomFieldsAPI(DirectoriesMixin, APITestCase):
         cf_select.save()
 
         mock_delay.assert_called_once_with(cf_select)
-
-    def test_custom_field_select_old_version(self) -> None:
-        """
-        GIVEN:
-            - Nothing
-        WHEN:
-            - API post request is made for custom fields with api version header < 7
-            - API get request is made for custom fields with api version header < 7
-        THEN:
-            - The select options are created with unique ids
-            - The select options are returned in the old format
-        """
-        resp = self.client.post(
-            self.ENDPOINT,
-            headers={"Accept": "application/json; version=6"},
-            data=json.dumps(
-                {
-                    "data_type": "select",
-                    "name": "Select Field",
-                    "extra_data": {
-                        "select_options": [
-                            "Option 1",
-                            "Option 2",
-                        ],
-                    },
-                },
-            ),
-            content_type="application/json",
-        )
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-
-        field = CustomField.objects.get(name="Select Field")
-        self.assertEqual(
-            field.extra_data["select_options"],
-            [
-                {"label": "Option 1", "id": ANY},
-                {"label": "Option 2", "id": ANY},
-            ],
-        )
-
-        resp = self.client.get(
-            f"{self.ENDPOINT}{field.id}/",
-            headers={"Accept": "application/json; version=6"},
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-
-        data = resp.json()
-        self.assertEqual(
-            data["extra_data"]["select_options"],
-            [
-                "Option 1",
-                "Option 2",
-            ],
-        )
-
-    def test_custom_field_select_value_old_version(self) -> None:
-        """
-        GIVEN:
-            - Existing document with custom field select
-        WHEN:
-            - API post request is made to add the field for document with api version header < 7
-            - API get request is made for document with api version header < 7
-        THEN:
-            - The select value is returned in the old format, the index of the option
-        """
-        custom_field_select = CustomField.objects.create(
-            name="Select Field",
-            data_type=CustomField.FieldDataType.SELECT,
-            extra_data={
-                "select_options": [
-                    {"label": "Option 1", "id": "abc-123"},
-                    {"label": "Option 2", "id": "def-456"},
-                ],
-            },
-        )
-
-        doc = Document.objects.create(
-            title="WOW",
-            content="the content",
-            checksum="123",
-            mime_type="application/pdf",
-        )
-
-        resp = self.client.patch(
-            f"/api/documents/{doc.id}/",
-            headers={"Accept": "application/json; version=6"},
-            data=json.dumps(
-                {
-                    "custom_fields": [
-                        {"field": custom_field_select.id, "value": 1},
-                    ],
-                },
-            ),
-            content_type="application/json",
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        doc.refresh_from_db()
-        self.assertEqual(doc.custom_fields.first().value, "def-456")
-
-        resp = self.client.get(
-            f"/api/documents/{doc.id}/",
-            headers={"Accept": "application/json; version=6"},
-        )
-        self.assertEqual(resp.status_code, status.HTTP_200_OK)
-
-        data = resp.json()
-        self.assertEqual(data["custom_fields"][0]["value"], 1)
 
     def test_create_custom_field_monetary_validation(self) -> None:
         """
@@ -1246,6 +1140,102 @@ class TestCustomFieldsAPI(DirectoriesMixin, APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(doc5.custom_fields.first().value, [1])
+
+    def test_documentlink_patch_requires_change_permission_on_target_documents(
+        self,
+    ) -> None:
+        source_owner = User.objects.create_user(username="source-owner")
+        source_owner.user_permissions.add(
+            Permission.objects.get(codename="change_document"),
+        )
+        other_user = User.objects.create_user(username="other-user")
+
+        source_doc = Document.objects.create(
+            title="Source",
+            checksum="source",
+            mime_type="application/pdf",
+            owner=source_owner,
+        )
+        target_doc = Document.objects.create(
+            title="Target",
+            checksum="target",
+            mime_type="application/pdf",
+            owner=other_user,
+        )
+        custom_field_doclink = CustomField.objects.create(
+            name="Test Custom Field Doc Link",
+            data_type=CustomField.FieldDataType.DOCUMENTLINK,
+        )
+
+        self.client.force_authenticate(user=source_owner)
+
+        resp = self.client.patch(
+            f"/api/documents/{source_doc.id}/",
+            data={
+                "custom_fields": [
+                    {
+                        "field": custom_field_doclink.id,
+                        "value": [target_doc.id],
+                    },
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            CustomFieldInstance.objects.filter(field=custom_field_doclink).count(),
+            0,
+        )
+
+    def test_documentlink_patch_allowed_with_change_permission_on_target_documents(
+        self,
+    ) -> None:
+        source_owner = User.objects.create_user(username="source-owner")
+        source_owner.user_permissions.add(
+            Permission.objects.get(codename="change_document"),
+        )
+        other_user = User.objects.create_user(username="other-user")
+
+        source_doc = Document.objects.create(
+            title="Source",
+            checksum="source",
+            mime_type="application/pdf",
+            owner=source_owner,
+        )
+        target_doc = Document.objects.create(
+            title="Target",
+            checksum="target",
+            mime_type="application/pdf",
+            owner=other_user,
+        )
+        custom_field_doclink = CustomField.objects.create(
+            name="Test Custom Field Doc Link",
+            data_type=CustomField.FieldDataType.DOCUMENTLINK,
+        )
+
+        assign_perm("change_document", source_owner, target_doc)
+        self.client.force_authenticate(user=source_owner)
+
+        resp = self.client.patch(
+            f"/api/documents/{source_doc.id}/",
+            data={
+                "custom_fields": [
+                    {
+                        "field": custom_field_doclink.id,
+                        "value": [target_doc.id],
+                    },
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        target_doc.refresh_from_db()
+        self.assertEqual(
+            target_doc.custom_fields.get(field=custom_field_doclink).value,
+            [source_doc.id],
+        )
 
     def test_custom_field_filters(self) -> None:
         custom_field_string = CustomField.objects.create(

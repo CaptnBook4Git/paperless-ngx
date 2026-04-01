@@ -12,7 +12,7 @@ import {
 import { DocumentMetadata } from 'src/app/data/document-metadata'
 import { DocumentSuggestions } from 'src/app/data/document-suggestions'
 import { FilterRule } from 'src/app/data/filter-rule'
-import { Results } from 'src/app/data/results'
+import { Results, SelectionData } from 'src/app/data/results'
 import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
 import { queryParamsFromFilterRules } from '../../utils/query-params'
 import {
@@ -24,22 +24,54 @@ import { SettingsService } from '../settings.service'
 import { AbstractPaperlessService } from './abstract-paperless-service'
 import { CustomFieldsService } from './custom-fields.service'
 
-export interface SelectionDataItem {
-  id: number
-  document_count: number
-}
-
-export interface SelectionData {
-  selected_storage_paths: SelectionDataItem[]
-  selected_correspondents: SelectionDataItem[]
-  selected_tags: SelectionDataItem[]
-  selected_document_types: SelectionDataItem[]
-  selected_custom_fields: SelectionDataItem[]
-}
-
 export enum BulkEditSourceMode {
   LATEST_VERSION = 'latest_version',
   EXPLICIT_SELECTION = 'explicit_selection',
+}
+
+export type DocumentBulkEditMethod =
+  | 'set_correspondent'
+  | 'set_document_type'
+  | 'set_storage_path'
+  | 'add_tag'
+  | 'remove_tag'
+  | 'modify_tags'
+  | 'modify_custom_fields'
+  | 'set_permissions'
+
+export interface MergeDocumentsRequest {
+  metadata_document_id?: number
+  delete_originals?: boolean
+  archive_fallback?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface EditPdfOperation {
+  page: number
+  rotate?: number
+  doc?: number
+}
+
+export interface EditPdfDocumentsRequest {
+  operations: EditPdfOperation[]
+  delete_original?: boolean
+  update_document?: boolean
+  include_metadata?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface RemovePasswordDocumentsRequest {
+  password: string
+  update_document?: boolean
+  delete_original?: boolean
+  include_metadata?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface DocumentSelectionQuery {
+  documents?: number[]
+  all?: boolean
+  filters?: { [key: string]: any }
 }
 
 @Injectable({
@@ -299,11 +331,63 @@ export class DocumentService extends AbstractPaperlessService<Document> {
     return this.http.get<DocumentMetadata>(url.toString())
   }
 
-  bulkEdit(ids: number[], method: string, args: any) {
+  bulkEdit(
+    selection: DocumentSelectionQuery,
+    method: DocumentBulkEditMethod,
+    args: any
+  ) {
     return this.http.post(this.getResourceUrl(null, 'bulk_edit'), {
-      documents: ids,
+      ...selection,
       method: method,
       parameters: args,
+    })
+  }
+
+  deleteDocuments(selection: DocumentSelectionQuery) {
+    return this.http.post(this.getResourceUrl(null, 'delete'), {
+      ...selection,
+    })
+  }
+
+  reprocessDocuments(selection: DocumentSelectionQuery) {
+    return this.http.post(this.getResourceUrl(null, 'reprocess'), {
+      ...selection,
+    })
+  }
+
+  rotateDocuments(
+    selection: DocumentSelectionQuery,
+    degrees: number,
+    sourceMode: BulkEditSourceMode = BulkEditSourceMode.LATEST_VERSION
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'rotate'), {
+      ...selection,
+      degrees,
+      source_mode: sourceMode,
+    })
+  }
+
+  mergeDocuments(ids: number[], request: MergeDocumentsRequest = {}) {
+    return this.http.post(this.getResourceUrl(null, 'merge'), {
+      documents: ids,
+      ...request,
+    })
+  }
+
+  editPdfDocuments(ids: number[], request: EditPdfDocumentsRequest) {
+    return this.http.post(this.getResourceUrl(null, 'edit_pdf'), {
+      documents: ids,
+      ...request,
+    })
+  }
+
+  removePasswordDocuments(
+    ids: number[],
+    request: RemovePasswordDocumentsRequest
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'remove_password'), {
+      documents: ids,
+      ...request,
     })
   }
 
@@ -325,14 +409,14 @@ export class DocumentService extends AbstractPaperlessService<Document> {
   }
 
   bulkDownload(
-    ids: number[],
+    selection: DocumentSelectionQuery,
     content = 'both',
     useFilenameFormatting: boolean = false
   ) {
     return this.http.post(
       this.getResourceUrl(null, 'bulk_download'),
       {
-        documents: ids,
+        ...selection,
         content: content,
         follow_formatting: useFilenameFormatting,
       },
