@@ -39,11 +39,11 @@ from documents.loggers import LoggingMixin
 from documents.models import Correspondent
 from documents.parsers import is_mime_type_supported
 from documents.tasks import consume_file
+from paperless.parsers.mail import MailDocumentParser
 from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
 from paperless_mail.models import ProcessedMail
 from paperless_mail.oauth import PaperlessMailOAuth2Manager
-from paperless_mail.parsers import MailDocumentParser
 from paperless_mail.preprocessor import MailMessageDecryptor
 from paperless_mail.preprocessor import MailMessagePreprocessor
 
@@ -724,7 +724,10 @@ class MailAccountHandler(LoggingMixin):
         tag_ids: list[int] = [tag.id for tag in rule.assign_tags.all()]
         doc_type = rule.assign_document_type
 
-        if rule.consumption_scope == MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT:
+        if (
+            rule.consumption_scope
+            == MailRule.ConsumptionScope.MERGED_EMAIL_AND_ATTACHMENT
+        ):
             processed_elements += self._process_combined_email_attachment_pdf(
                 message,
                 rule,
@@ -837,7 +840,9 @@ class MailAccountHandler(LoggingMixin):
         )
 
         if representative_attachment is not None:
-            filename = pathvalidate.sanitize_filename(representative_attachment.filename)
+            filename = pathvalidate.sanitize_filename(
+                representative_attachment.filename
+            )
             if not filename:
                 filename = "mail-attachment.pdf"
         else:
@@ -1130,9 +1135,7 @@ class MailAccountHandler(LoggingMixin):
             document_type_id=doc_type.id if doc_type else None,
             tag_ids=tag_ids,
             owner_id=(
-                rule.owner.id
-                if (rule.assign_owner_from_rule and rule.owner)
-                else None
+                rule.owner.id if (rule.assign_owner_from_rule and rule.owner) else None
             ),
         )
 
